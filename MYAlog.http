@@ -1,0 +1,6 @@
+@MYAlog_HostAddress = http://localhost:5222
+
+GET {{MYAlog_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
