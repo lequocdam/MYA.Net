@@ -10,16 +10,17 @@ public class AuthController(IAuthService authService) : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register(
         [FromBody] RegisterDTO dto,
-        [FromServices] IValidator<RegisterDTO> validator)
+        [FromServices] IValidator<RegisterDTO> validator,
+        CancellationToken ct)
     {
         var result = await validator.ValidateAsync(dto);
         if (!result.IsValid)
             return BadRequest(result.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
 
         var email = await authService.RegisterAsync(dto);
-        return Ok(new ApiResponse<string>
+        return Ok(new ApiResponse<object>
         {
-            Message = "Otp sent. Please check email",
+            Message = "OTP sent to {Email}", email,
             Data = email,
         });
     }

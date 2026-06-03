@@ -1,4 +1,4 @@
-public interface IAuthRepository
+public interface IUserRepository
 {
     Task<bool> AnyAsync(string phone, string email,
         CancellationToken ct = default);

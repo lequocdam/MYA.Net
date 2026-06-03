@@ -11,9 +11,9 @@ public class AuthService(
     private const int RefreshDays     = 7;
 
     // REGISTER
-    public async Task<string> RegisterAsync(RegisterDTO dto)
+    public async Task<object> RegisterAsync(RegisterDTO dto, CancellationToken ct)
     {
-        var exist = await repo.AnyAsync(dto.Phone, dto.Email);
+        var exist = await repo.AnyAsync(dto.Phone, dto.Email, ct);
         if (exist)
             throw new ConflictException("Phone or email registered");
 
@@ -25,8 +25,7 @@ public class AuthService(
     // VERIFY
     public async Task<UserDTO> VerifyAsync(OtpDTO dto)
     {
-        var register = await otp.VerifyOtpAsync(dto);
-        var hash = BCrypt.Net.BCrypt.HashPassword(register.Password);
+        var user = await otp.VerifyOtpAsync(dto);
         var user = new User
         {
             Id = Guid.NewGuid(),
@@ -41,7 +40,7 @@ public class AuthService(
 
         try
         {
-            await repo.SaveChangesAsync();
+            await user.CreateAsync(user);
         }
         catch (DbUpdateException)
         {

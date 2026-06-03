@@ -1,31 +1,14 @@
 using StackExchange.Redis;
 
-namespace AuthSystem.Services;
-
-public interface IRedisService
-{
-    Task<bool> SetAsync(string key, string value, TimeSpan? expiry = null);
-    Task<bool> SetIfNotExistsAsync(string key, string value, TimeSpan expiry);
-    Task<string?> GetAsync(string key);
-    Task<bool> DeleteAsync(string key);
-    Task<bool> ExistsAsync(string key);
-    Task<long> IncrementAsync(string key);
-    Task<bool> ExpireAsync(string key, TimeSpan expiry);
-    Task<bool> SetWithAtomicExpireAsync(string key, string value, TimeSpan expiry);
-}
-
 public class RedisService(IConnectionMultiplexer cmr) : IRedisService
 {
     private readonly IDatabase _db = cmr.GetDatabase();
 
-    public Task<bool> SetAsync(string key, string value, TimeSpan? expiry = null)
-        => _db.StringSetAsync(key, value, expiry);
-
-    /// <summary>
-    /// SET NX EX — atomic set-if-not-exists với expiry. Dùng cho cooldown / rate limit.
-    /// </summary>
-    public Task<bool> SetIfNotExistsAsync(string key, string value, TimeSpan expiry)
+    public Task<bool> SetWhenNotExistsAsync(string key, string value, TimeSpan? expiry)
         => _db.StringSetAsync(key, value, expiry, When.NotExists);
+
+    public Task<bool> SetAsync(string key, string value, TimeSpan? expiry)
+        => _db.StringSetAsync(key, value, expiry);
 
     public async Task<string?> GetAsync(string key)
     {

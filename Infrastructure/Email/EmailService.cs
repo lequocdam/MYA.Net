@@ -9,17 +9,16 @@ public class EmailService(
 {
     private readonly EmailSettings _cfg = options.Value;
 
-    public async Task SendOtpEmailAsync(string toEmail, string toName, tring otp, CancellationToken ct = default)
+    public async Task SendOTPToEmailAsync(string toEmail, string toName, tring otp, CancellationToken ct = default)
     {
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(_cfg.FromName, _cfg.FromAddress));
         message.To.Add(new MailboxAddress(toName, toEmail));
-        message.Subject = "Mã xác thực OTP của bạn";
+        message.Subject = "Mã xác thực OTP";
 
-        // Body: vừa plain text vừa HTML — client chọn loại phù hợp
         var builder = new BodyBuilder
         {
-            TextBody = $"Mã OTP của bạn là: {otp}\nMã có hiệu lực trong 5 phút.",
+            TextBody = $"Mã xác thực OTP của bạn là: {otp} có hiệu lực trong 5 phút.",
             HtmlBody = BuildHtml(otp)
         };
         message.Body = builder.ToMessageBody();
@@ -27,7 +26,6 @@ public class EmailService(
         using var smtp = new SmtpClient();
         try
         {
-            // StartTls cho port 587, SslOnConnect cho port 465
             var secureOption = _cfg.UseSsl
                 ? SecureSocketOptions.SslOnConnect
                 : SecureSocketOptions.StartTls;
