@@ -58,9 +58,9 @@ public class UserService(
         };
     }
 
-    public async Task<UserDTO> CreateAsync(CreateUserDTO dto)
+    public async Task<UserDTO> CreateAsync(CreateUserDTO dto, CancellationToken ct)
     {
-        var exist = await repo.AnyAsync(dto.Phone, dto.Email);
+        var exist = await repo.AnyAsync(dto.Phone, dto.Email, ct);
         if (exist)
             throw new ConflictException("Phone or email created");
 
@@ -75,21 +75,29 @@ public class UserService(
             Role = dto.Role ?? "user",
         };
 
-        logger.LogInformation("{Id}, {Role} created", user.Id, user.Role);
+        await repo.Add(user, ct);
 
-        await repo.Add(user);
-        await repo.SaveChangesAsync();
+        try
+        {
+            await repo.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            logger.LogWarning(ex,
+            "Duplicate user for {Phone} or {Email}",
+            dto.Phone,
+            dto.Email);
 
-        return new ApiResponse<CreateUserResDTO>{
-            Message = "Account created",
-            Data = {
-                user.Id, 
-                user.Name,
-                user.Phone,
-                user.Email,
-                user.Role,
-            },
-        };
+            throw new ConflictException("Phone or email registered");
+        }
+
+        return new UserDTO{
+            Id = Guid.NewGuid(),
+            Name = dto.Name,
+            Phone = dto.Phone,
+            Email = dto.Email,
+            Role = dto.Role ?? "user",
+        }
     }
 
     public async Task<UserResDTO> UpdateAsync(UpdateUserDTO dto, Guid userId)

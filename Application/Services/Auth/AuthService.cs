@@ -1,8 +1,6 @@
-using Microsoft.EntityFrameworkCore;
-
 public class AuthService(
-    IAuthRepository repo,
-    IOtpService otp,
+    IUserRepository userRepo,
+    IOTPService otpService,
     ITokenService token,
     IRefreshService refresh,
     IUserService user,
@@ -14,51 +12,32 @@ public class AuthService(
     // REGISTER
     public async Task<object> RegisterAsync(RegisterDTO dto, CancellationToken ct)
     {
-        var exist = await repo.AnyAsync(dto.Phone, dto.Email, ct);
+        var exist = await userRepo.AnyAsync(dto.Phone, dto.Email, ct);
         if (exist)
             throw new ConflictException("Phone or email registered");
 
-        return await otp.SendOTPAsync(dto);
+        return await otpService.SendOTPAsync(dto, ct);
     }
 
     // RESEND OTP
 
-    // VERIFY
-    public async Task<UserDTO> VerifyAsync(OtpDTO dto)
+    // VERIFY OTP
+    public async Task<UserDTO> VerifyOTPAsync(OtpDTO dto, CancellationToken ct)
     {
-        var register = await otp.VerifyOtpAsync(dto);
+        var userCache = await otpService.VerifyOTPAsync(dto, ct);
 
-        try
-        {
-            var user = await userService.CreateAsync(
+        var user = await userService.CreateAsync(
             new CreateUserDTO
             {
-                Name = register.Name,
-                Phone = register.Phone,
-                Email = register.Email,
-                Password = register.Password
-            });
-        }
-        catch (DbUpdateException)
-        {
-            logger.LogWarning(ex,
-            "Duplicate user for {Phone} or {Email}",
-            dto.Phone,
-            dto.Email);
+                Name = userCache.Name,
+                Phone = userCache.Phone,
+                Email = userCache.Email,
+                Password = userCache.Password
+            }, ct);
 
-            throw new ConflictException("Phone or email registered");
-        }
+        await otpService.DeleteOTPAsync(user.Email);
 
-        return new UserDTO{
-            Message = "Account created",
-            Data = {
-                u.Id, 
-                u.Name,
-                u.Phone,
-                u.Email,
-                u.Role,
-            },
-        };
+        return user;
     }
 
     // LOGIN

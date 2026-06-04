@@ -18,10 +18,9 @@ public class AuthController(IAuthService authService) : ControllerBase
             return BadRequest(result.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
 
         var email = await authService.RegisterAsync(dto);
-        return Ok(new ApiResponse<object>
+        return Ok(new APIResponse<object>
         {
             Message = $"OTP sent to {email}",
-            Data = email,
         });
     }
 

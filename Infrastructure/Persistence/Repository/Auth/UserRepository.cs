@@ -1,4 +1,4 @@
-public sealed class AuthRepository(AppDbContext db) : IAuthRepository
+public sealed class UserRepository(AppDbContext db) : IUserRepository
 {
     public async Task<bool> AnyAsync(string phone, string email,
         CancellationToken ct = default)
