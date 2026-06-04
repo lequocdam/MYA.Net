@@ -58,9 +58,9 @@ public class UserService(
         };
     }
 
-    public async Task<UserResDTO> CreateAsync(CreateUserDTO dto)
+    public async Task<UserDTO> CreateAsync(CreateUserDTO dto)
     {
-        var exist = await repo.AnyAsync(dto.Phone || dto.Email);
+        var exist = await repo.AnyAsync(dto.Phone, dto.Email);
         if (exist)
             throw new ConflictException("Phone or email created");
 
@@ -72,7 +72,7 @@ public class UserService(
             Phone = dto.Phone,
             Email = dto.Email,
             Password = hash,
-            Role = dto.Role,
+            Role = dto.Role ?? "user",
         };
 
         logger.LogInformation("{Id}, {Role} created", user.Id, user.Role);

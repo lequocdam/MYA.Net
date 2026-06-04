@@ -5,6 +5,7 @@ public class AuthService(
     IOtpService otp,
     ITokenService token,
     IRefreshService refresh,
+    IUserService user,
     ILogger<AuthService> logger) : IAuthService,
 {
     private const int Logininutes = 5;
@@ -25,37 +26,37 @@ public class AuthService(
     // VERIFY
     public async Task<UserDTO> VerifyAsync(OtpDTO dto)
     {
-        var user = await otp.VerifyOtpAsync(dto);
-        var user = new User
-        {
-            Id = Guid.NewGuid(),
-            Name = register.Name,
-            Phone = register.Phone,
-            Email = register.Email,
-            Password = hash,
-            Role = "user",
-        };
-
-        await repo.Add(user);
+        var register = await otp.VerifyOtpAsync(dto);
 
         try
         {
-            await user.CreateAsync(user);
+            var user = await userService.CreateAsync(
+            new CreateUserDTO
+            {
+                Name = register.Name,
+                Phone = register.Phone,
+                Email = register.Email,
+                Password = register.Password
+            });
         }
         catch (DbUpdateException)
         {
+            logger.LogWarning(ex,
+            "Duplicate user for {Phone} or {Email}",
+            dto.Phone,
+            dto.Email);
+
             throw new ConflictException("Phone or email registered");
-            logger.LogWarning("Duplicate user for {Phone} or {Email}", dto.Phone, dto.Email);
         }
 
         return new UserDTO{
             Message = "Account created",
             Data = {
-                user.Id, 
-                user.Name,
-                user.Phone,
-                user.Email,
-                user.Role,
+                u.Id, 
+                u.Name,
+                u.Phone,
+                u.Email,
+                u.Role,
             },
         };
     }

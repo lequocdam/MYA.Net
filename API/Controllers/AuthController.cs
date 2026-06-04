@@ -20,7 +20,7 @@ public class AuthController(IAuthService authService) : ControllerBase
         var email = await authService.RegisterAsync(dto);
         return Ok(new ApiResponse<object>
         {
-            Message = "OTP sent to {Email}", email,
+            Message = $"OTP sent to {email}",
             Data = email,
         });
     }

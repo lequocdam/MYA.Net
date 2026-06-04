@@ -63,7 +63,7 @@ public class OTPService(
         if (value.OTP != dto.OTP)
             throw new BadRequestException($"Invalid OTP. {5 - attempts} attempts");
 
-        var deleted = await redis.DeleteAsync(otpKey);
+        var deleted = await redis.DeleteAsync(key);
         if (!deleted)
             throw new ConflictException("OTP already used");
 
@@ -81,7 +81,7 @@ public class OTPService(
     private static string MaskEmail(string email)
     {
         var parts = email.Split('@');
-        var part = parts[0];
+        var part = part[0];
 
         var mask = local.Length <= 2
             ? new string('*', part.Length)
