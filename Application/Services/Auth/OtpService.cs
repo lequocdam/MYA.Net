@@ -1,10 +1,10 @@
-public class OTPService(
+public class OtpService(
     IRedisService redisService,
     ICryptoService crypto,
     IEmailService email,
     ILogger<OTPService> logger) : IOTPService
 {
-    public async Task<string> SendOTPAsync(RegisterDTO dto, CancellationToken ct)
+    public async Task SendOtpAsync(RegisterDTO dto, CancellationToken ct)
     {
         var cooldownKey = $"register:cooldown:{dto.Email}";
         var exist = await redisService.SetWhenNotExistsAsync(cooldownKey, "1", TimeSpan.FromSeconds(60));
@@ -12,29 +12,28 @@ public class OTPService(
             throw new TooManyRequestsException("");
 
         var otp = GenerateOTP();
-        var hash = BCrypt.HashPassword(otp),
+        
+        var hash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
         var key = $"otp:register:{dto.Email}";
         var value = new UserCache
         {
             Name = dto.Name,
             Phone = dto.Phone,
             Email = dto.Email,
-            Password = dto.Password,
-            OTP = hash,
+            Password = hash,
+            Otp = otp,
         };
-        var json = JsonSerializer.Serialize(value);
-        var encrypt = crypto.Encrypt(json);
+
+        var encrypt = crypto.Encrypt(JsonSerializer.Serialize(value));
 
         await redisService.SetAsync(key, encrypt, TimeSpan.FromMinutes(5), ct);
         logger.LogInformation("OTP sent to cache");
 
         await email.SendOTPToEmailAsync(value.Email, value.Name, value.OTP, ct);
         logger.LogInformation($"OTP sent to {value.Email}");
-
-        return MaskEmail(value.Email);
     }
 
-    public async Task<UserCache> VerifyOTPAsync(OtpDTO dto, CancellationToken ct)
+    public async Task<UserCache> VerifyOtpAsync(OtpDto dto, CancellationToken ct)
     {
         var attemptKey = $"otp:register:attempt:{dto.Email}";
         var attempts = await redisService.IncrementAsync(attemptKey, ct);
@@ -48,14 +47,13 @@ public class OTPService(
         }
 
         var key = $"otp:register:{dto.Email}";
-        var decrypt = await redisService.GetAsync(key);
+        var decrypt = await redisService.GetAsync(key, ct);
         if (decrypt is null)
-            throw new BadRequestException("OTP not found or expired");
+            throw new BadRequestException("OTP expired");
 
-        var value = JsonSerializer.Deserialize<UserCache>(crypto.Decrypt(decrypt);) 
-            ?? throw new BadRequestException("Invalid data");
-        if (value.OTP != dto.OTP)
-            throw new BadRequestException($"Invalid OTP. {5 - attempts} attempts");
+        var value = JsonSerializer.Deserialize<UserCache>(crypto.Decrypt(decrypt)); 
+        if (value.Otp != dto.Otp)
+            throw new BadRequestException($"Invalid OTP");
 
         return value;
     }

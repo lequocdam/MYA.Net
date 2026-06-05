@@ -1,19 +1,3 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
-using AuthSystem.Models;
-using Microsoft.IdentityModel.Tokens;
-
-namespace AuthSystem.Services;
-
-public interface ITokenService
-{
-    string GenerateAccessToken(User user);
-    string GenerateRefreshToken();
-    string HashToken(string token);
-}
-
 public class TokenService(IConfiguration config) : ITokenService
 {
     private readonly string _jwtKey = config["Jwt:Key"]

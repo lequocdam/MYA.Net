@@ -1,7 +1,7 @@
 public class AuthService(
     IUserRepository userRepo,
-    IOTPService otpService,
-    ITokenService token,
+    IOtpService otpService,
+    ITokenService tokenService,
     IRefreshService refresh,
     IUserService user,
     ILogger<AuthService> logger) : IAuthService,
@@ -10,56 +10,60 @@ public class AuthService(
     private const int RefreshDays     = 7;
 
     // REGISTER
-    public async Task<object> RegisterAsync(RegisterDTO dto, CancellationToken ct)
+    public async Task RegisterAsync(RegisterDTO dto, CancellationToken ct)
     {
         var exist = await userRepo.AnyAsync(dto.Phone, dto.Email, ct);
         if (exist)
             throw new ConflictException("Phone or email registered");
 
-        return await otpService.SendOTPAsync(dto, ct);
+        await otpService.SendOTPAsync(dto, ct);
     }
 
     // RESEND OTP
 
     // VERIFY OTP
-    public async Task<UserDTO> VerifyOTPAsync(OtpDTO dto, CancellationToken ct)
+    public async Task<UserDto> VerifyOtpAsync(OtpDto dto, CancellationToken ct)
     {
-        var userCache = await otpService.VerifyOTPAsync(dto, ct);
+        var userCache = await otpService.VerifyOtpAsync(dto, ct);
+        await userRepo.Add(new User{
+            Id = Guid.NewGuid(),
+            Name = userCache.Name,
+            Phone = userCache.Phone,
+            Email = userCache.Email,
+            Password = userCache.Password,
+            Role = Role.USER,
+        }, ct);
 
-        var user = await userService.CreateAsync(
-            new CreateUserDTO
-            {
-                Name = userCache.Name,
-                Phone = userCache.Phone,
-                Email = userCache.Email,
-                Password = userCache.Password
-            }, ct);
+        try
+        {
+            var user = await userRepo.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            logger.LogWarning(ex,"Duplicate user for {Phone} or {Email}",dto.Phone, dto.Email);
 
-        await otpService.DeleteOTPAsync(user.Email);
+            throw new ConflictException("Phone or email registered");
+        }
 
-        return user;
+        return new UserDto{
+            Id = user.Id,
+            Role = user.Role,
+        };
     }
 
     // LOGIN
-    public async Task<TokensDTO> LoginAsync(LoginDTO Dto, string Ip)
+    public async Task<TokenDto> LoginAsync(LoginDto dto, string Ip, CancellationToken ct)
     {
-        var rateLimitKey = $"login:{Dto.Phone}:{Ip}";
-        var allow = await redis.SetWithAtomicExpireAsync(
-            rateLimitKey, "1", TimeSpan.FromMinutes(LoginMinutes));
-        if (!allow)
-            throw new TooManyRequestsException(
-                $"Too many attempts. Try again in {LoginMinutes} minutes");
-
-        var user = await repo.FirstOrDefaultAsync(Dto.Phone);
-        if (user is null || !BCrypt.Net.BCrypt.Verify(user.Password, dto.Password))
+        var user = await userRepo.FirstOrDefaultAsync(dto.Phone, ct);
+        if (user is null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.Password))
             throw new UnauthorizedException("Invalid phone or password");
 
-        var accessToken  = token.GenerateAccessToken(user);
-        var refreshToken = refresh.CreateAsync(user.UserId);
+        var accessToken  = tokenService.GenerateAccessToken(user);
+        var refreshToken = await refresh.CreateAsync(user.Id, ct);
 
-        return new TokensDTO{
-            accessToken, 
-            refreshToken,
+        return new TokenDto{
+            AccessToken  = accessToken,
+            RefreshToken = refreshToken,
         };
     }
 

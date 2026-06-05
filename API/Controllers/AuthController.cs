@@ -13,27 +13,28 @@ public class AuthController(IAuthService authService) : ControllerBase
         [FromServices] IValidator<RegisterDTO> validator,
         CancellationToken ct)
     {
-        var result = await validator.ValidateAsync(dto);
-        if (!result.IsValid)
-            return BadRequest(result.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
+        var validate = await validator.ValidateAsync(dto);
+        if (!validate.IsValid)
+            return BadRequest(validate.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
 
-        var email = await authService.RegisterAsync(dto);
-        return Ok(new APIResponse<object>
+        await authService.RegisterAsync(dto, ct);
+        return Ok(new APIResponse<T>
         {
-            Message = $"OTP sent to {email}",
+            Message = "OTP sent to email",
         });
     }
 
     [HttpPost("verify")]
-    public async Task<IActionResult> Verify(
-        [FromBody] OtpDTO dto,
-        [FromServices] IValidator<OtpDTO> validator)
+    public async Task<IActionResult> VerifyOTPAsync(
+        [FromBody] OTPDTO dto,
+        [FromServices] IValidator<OTPDTO> validator,
+        CancellationToken ct)
     {
-        var result = await validator.ValidateAsync(dto);
-        if (!result.IsValid)
-            return BadRequest(result.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
+        var validate = await validator.ValidateAsync(dto);
+        if (!validate.IsValid)
+            return BadRequest(validate.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
 
-        var acc = await authService.VerifyAsync(dto);
+        var acc = await authService.VerifyOTPAsync(dto, ct);
         return Created(new ApiResponse<UserDTO>
         {
             Message = "Account created",

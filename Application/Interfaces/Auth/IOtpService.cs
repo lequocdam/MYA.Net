@@ -1,5 +1,5 @@
 public interface IOtpService
 {
-    Task SendOTPAsync(RegisterDTO dto);
+    Task SendOtpAsync(RegisterDTO dto, CancellationToken ct);
     Task<UserDTO> VerifyOtpAsync(OtpDTO dto);
 }

@@ -1,9 +1,4 @@
-using AuthSystem.Models;
-using Microsoft.EntityFrameworkCore;
-
-namespace AuthSystem.Data;
-
-public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+public class DbContext(DbContextOptions<DbContext> options) : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Refresh> Refreshs => Set<Refresh>();
@@ -13,6 +8,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         b.Entity<User>(e =>
         {
             e.HasKey(u => u.Id);
+            e.HasIndex(u => u.Avatar);
             e.HasIndex(u => u.Name);
             e.HasIndex(u => u.Phone).IsUnique();
             e.HasIndex(u => u.Email).IsUnique();

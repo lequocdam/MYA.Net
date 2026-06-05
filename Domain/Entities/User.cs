@@ -1,6 +1,6 @@
     public class User
     {
-        public string Id { get; set; }
+        public Guid Id { get; set; }
 
         public string Avatar { get; set; }
 
@@ -12,5 +12,5 @@
 
         public string Password { get; set; }
 
-        public string Role { get; set; }
+        public Role Role { get; set; }
     }

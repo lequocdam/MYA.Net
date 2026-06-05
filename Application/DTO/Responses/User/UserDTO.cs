@@ -1,4 +1,4 @@
-public class CreateUserResDTO
+public class UserDTO
 {
     public string Id { get; set; }
 

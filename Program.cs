@@ -47,7 +47,21 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 
+builder.Services.AddStackExchangeRedisCache(opt =>
+    opt.Configuration = builder.Configuration["Redis:Connection"]);
+
+builder.Services.Configure<IpRateLimitOptions>(
+    builder.Configuration.GetSection("IpRateLimiting"));
+
+builder.Services.AddSingleton<IIpPolicyStore, DistributedCacheIpPolicyStore>();
+builder.Services.AddSingleton<IRateLimitCounterStore, DistributedCacheRateLimitCounterStore>();
+builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>();
+builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
+builder.Services.AddInMemoryRateLimiting();
+
+
 var app = builder.Build();
+app.UseIpRateLimiting();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

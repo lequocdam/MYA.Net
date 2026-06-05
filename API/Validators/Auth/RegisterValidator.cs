@@ -8,12 +8,12 @@ public class RegisterValidator : AbstractValidator<RegisterDTO>
         RuleFor(r => r.Phone)
             .Cascade(CascadeMode.Stop)
             .NotEmpty().WithMessage("Yêu cầu số điện thoại")
-            .Matches(@"^(0|\+84)[3-9]\d{8}$").WithMessage("Yêu cầu phải đúng số điện thoại");
+            .Matches(@"^(0|\+84)[3-9]\d{8}$").WithMessage("Số điện thoại phải đúng định dạng");
  
         RuleFor(r => r.Email)
             .Cascade(CascadeMode.Stop)
             .NotEmpty().WithMessage("Yêu cầu email")
-            .EmailAddress().WithMessage("Yêu cầu phải đúng email");
+            .EmailAddress().WithMessage("Email phải đúng định dạng");
  
         RuleFor(r => r.Password)
             .Cascade(CascadeMode.Stop)
