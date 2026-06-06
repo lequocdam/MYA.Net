@@ -59,7 +59,38 @@ builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>()
 builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
 builder.Services.AddInMemoryRateLimiting();
 
+builder.Services.AddRateLimiter(options =>
+{
+    // Rate limit cho Register — theo Email từ request body
+    // Không dùng IP vì cùng IP có thể nhiều user (NAT, văn phòng)
+    options.AddPolicy("register", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            // Key theo email — lấy từ form/body không được ở đây
+            // nên dùng IP làm fallback, xử lý theo email trong service
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit          = 3,               // 3 lần
+                Window               = TimeSpan.FromMinutes(1),  // trong 1 phút
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit           = 0,               // không queue — reject ngay
+            }));
 
+    // Trả về 429 thay vì 503
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Custom response khi bị block
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.StatusCode = 429;
+        await context.HttpContext.Response.WriteAsJsonAsync(new
+        {
+            message = "Quá nhiều yêu cầu. Vui lòng thử lại sau."
+        }, ct);
+    };
+});
+
+app.UseRateLimiter(); 
 var app = builder.Build();
 app.UseIpRateLimiting();
 

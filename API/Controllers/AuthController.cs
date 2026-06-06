@@ -8,6 +8,7 @@ public class AuthController(IAuthService authService) : ControllerBase
     private const string Ip = HttpContext.Connection.RemoteIpAddress?.ToString();
 
     [HttpPost("register")]
+    [EnableRateLimiting("register")]
     public async Task<IActionResult> Register(
         [FromBody] RegisterDTO dto,
         [FromServices] IValidator<RegisterDTO> validator,

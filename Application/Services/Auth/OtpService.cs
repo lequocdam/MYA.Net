@@ -1,36 +1,62 @@
 public class OtpService(
     IRedisService redisService,
-    ICryptoService crypto,
-    IEmailService email,
+    ICryptoService cryptoService,
+    IEmailService emailService,
     ILogger<OTPService> logger) : IOTPService
 {
-    public async Task SendOtpAsync(RegisterDTO dto, CancellationToken ct)
+    public async Task<string> SendOtpAsync(RegisterDTO dto, CancellationToken ct)
     {
-        var cooldownKey = $"register:cooldown:{dto.Email}";
-        var exist = await redisService.SetWhenNotExistsAsync(cooldownKey, "1", TimeSpan.FromSeconds(60));
-        if (!exist)
-            throw new TooManyRequestsException("");
-
+        var hashPassword = BCrypt.Net.BCrypt.HashPassword(dto.Password);
         var otp = GenerateOTP();
-        
-        var hash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+
         var key = $"otp:register:{dto.Email}";
+
         var value = new UserCache
         {
             Name = dto.Name,
             Phone = dto.Phone,
             Email = dto.Email,
-            Password = hash,
+            Password = hashPassword,
             Otp = otp,
         };
+        var encryptValue = cryptoService.Encrypt(JsonSerializer.Serialize(value));
 
-        var encrypt = crypto.Encrypt(JsonSerializer.Serialize(value));
+        await redisService.SetAsync(key, encryptValue, TimeSpan.FromMinutes(5), ct);
 
-        await redisService.SetAsync(key, encrypt, TimeSpan.FromMinutes(5), ct);
-        logger.LogInformation("OTP sent to cache");
+        var maskEmail = MaskEmail(value.Email);
+        await emailService.SendOTPToEmailAsync(value.Email, value.Otp, ct);
+        logger.LogInformation($"OTP sent to {maskEmail}");
 
-        await email.SendOTPToEmailAsync(value.Email, value.Name, value.OTP, ct);
-        logger.LogInformation($"OTP sent to {value.Email}");
+        return maskEmail;
+    }
+
+    // RESEND OTP
+    public async Task ResendOtpAsync(ResendOtpDTO dto, CancellationToken ct)
+    {
+        var cooldownKey = $"otp:register:cooldown:{dto.Email}";
+        var allow = await redisService.SetWhenNotExistsAsync(cooldownKey, "1", TimeSpan.FromSeconds(60));
+        if (!allow)
+            throw new TooManyRequestsException("Vui lòng chờ 60 giây trước khi gửi lại");
+
+        var key     = $"otp:register:{dto.Email}";
+
+        var decryptValue = await redisService.GetAsync(key, ct);
+        if (decryptValue is null)
+            throw new BadRequestException("Phiên đăng ký đã hết hạn. Vui lòng đăng ký lại");
+        var value = JsonSerializer.Deserialize<UserCache>(cryptoService.Decrypt(decryptValue));
+
+        var newOtp         = GenerateOTP();
+        value.Otp          = newOtp;
+
+        var newEncryptValue = cryptoService.Encrypt(JsonSerializer.Serialize(value));
+        await redisService.SetAsync(key, newEncryptValue, TimeSpan.FromMinutes(5), ct);
+
+        // 6. Reset attempt counter để user có 5 lần thử mới
+        var attemptKey = $"otp:register:attempt:{dto.Email}";
+        await redisService.DeleteAsync(attemptKey, ct);
+
+        await email.SendOTPToEmailAsync(value.Email, value.Otp , ct);
+        logger.LogInformation($"OTP resent to {value.Email}");
     }
 
     public async Task<UserCache> VerifyOtpAsync(OtpDto dto, CancellationToken ct)

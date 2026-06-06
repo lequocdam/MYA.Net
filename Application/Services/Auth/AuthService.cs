@@ -4,39 +4,48 @@ public class AuthService(
     ITokenService tokenService,
     IRefreshService refresh,
     IUserService user,
-    ILogger<AuthService> logger) : IAuthService,
+    ILogger<AuthService> logger) : IAuthService
 {
-    private const int Logininutes = 5;
     private const int RefreshDays     = 7;
 
     // REGISTER
-    public async Task RegisterAsync(RegisterDTO dto, CancellationToken ct)
+    public async Task<EmailDto> RegisterAsync(RegisterDTO dto, CancellationToken ct)
     {
         var exist = await userRepo.AnyAsync(dto.Phone, dto.Email, ct);
         if (exist)
             throw new ConflictException("Phone or email registered");
 
-        await otpService.SendOTPAsync(dto, ct);
+        var maskEmail = await otpService.SendOtpAsync(dto, ct);
+
+        return new EmailDto{
+            Email  = email,
+        };
     }
 
     // RESEND OTP
+    public async Task ResendOtpAsync(ResendOtpDto dto, CancellationToken ct)
+    {
+        await otpService.ResendOtpAsync(dto, ct);
+    }
 
     // VERIFY OTP
     public async Task<UserDto> VerifyOtpAsync(OtpDto dto, CancellationToken ct)
     {
         var userCache = await otpService.VerifyOtpAsync(dto, ct);
-        await userRepo.Add(new User{
+        var user = new User{
             Id = Guid.NewGuid(),
             Name = userCache.Name,
             Phone = userCache.Phone,
             Email = userCache.Email,
             Password = userCache.Password,
             Role = Role.USER,
-        }, ct);
+        };
+
+        await userRepo.Add(user, ct);
 
         try
         {
-            var user = await userRepo.SaveChangesAsync(ct);
+            await userRepo.SaveChangesAsync(ct);
         }
         catch (DbUpdateException)
         {
@@ -52,11 +61,18 @@ public class AuthService(
     }
 
     // LOGIN
-    public async Task<TokenDto> LoginAsync(LoginDto dto, string Ip, CancellationToken ct)
+    public async Task<TokenDto> LoginAsync(LoginDto dto, CancellationToken ct)
     {
         var user = await userRepo.FirstOrDefaultAsync(dto.Phone, ct);
-        if (user is null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.Password))
-            throw new UnauthorizedException("Invalid phone or password");
+        if (user is null)
+        {
+            throw new NotFoundException("Phone not found");
+        }
+
+        if (!BCrypt.Net.BCrypt.Verify(dto.Password, user.Password))
+        {
+            throw new UnauthorizedException("Invalid password");
+        }
 
         var accessToken  = tokenService.GenerateAccessToken(user);
         var refreshToken = await refresh.CreateAsync(user.Id, ct);

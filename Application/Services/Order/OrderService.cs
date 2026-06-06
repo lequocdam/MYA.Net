@@ -125,14 +125,14 @@ public class OrderService : IOrderService
     }
 
     // CREATE
-    public async Task<OrderDTO> Create(CreatedOrderDTO dto, Guid userId)
+    public async Task<OrderDTO> CreateAsync(OrderCreatingDto dto, Guid userId)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
+        using var transaction = await db.Database.BeginTransactionAsync();
 
         try
         {
-            var sender   = await _addressService.Create(dto.Sender);
-            var receiver = await _addressService.Create(dto.Receiver);
+            var sender   = await addressService.CreateAsync(dto.Sender);
+            var receiver = await addressService.CreateAsync(dto.Receiver);
             var items = dto.Items.Select(i => new Item
             {
                 Image    = i.Image,

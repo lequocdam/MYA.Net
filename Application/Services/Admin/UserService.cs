@@ -146,86 +146,28 @@ public class UserService(
         return path;
     }
 
-    public async Task<UserResponseDTO> UpdateAsync(
-        UpdateUserDTO dto, Guid userId, CancellationToken ct)
+    // UPDATE USER
+    public async Task<UserDto> UpdateAsync(UpdateUserDto dto, Guid userId, , CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-            ?? throw new NotFoundException("Account", userId);
- 
+        var user = await userRepo.FirstOrDefaultAsync(userId, ct);
+        if (user is null)
+            throw new NotFoundException("Account not found");
+
         user.Name = dto.Name;
- 
+        user.Phone = dto.Phone;
+        user.Email = dto.Email;
+
         await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation("User updated. UserId={UserId}", userId);
- 
-        return new UserResponseDTO
-        {
-            Id     = user.Id,
-            Name   = user.Name,
-            Phone  = user.Phone,
-            Email  = user.Email,
-            Role   = user.Role,
-            Avatar = user.Avatar,
+
+        return new UserDto{
+            Id = user.Id,
+            Name = user.Name,
+            Phone = user.Phone,
+            Email = user.Email,
+            Role = user.Role,
         };
     }
- 
-    public async Task<UserResponseDTO> AdminUpdateAsync(
-        AdminUpdateUserDTO dto, Guid targetUserId, CancellationToken ct)
-    {
-        var user = await userRepo.FirstOrDefaultAsync(targetUserId, ct)
-            ?? throw new NotFoundException("Account", targetUserId);
- 
-        var changed = new List<string>();
- 
-        if (user.Name != dto.Name)
-        {
-            changed.Add($"Name: {user.Name} → {dto.Name}");
-            user.Name = dto.Name;
-        }
- 
-        if (user.Role != dto.Role)
-        {
-            changed.Add($"Role: {user.Role} → {dto.Role}");
-            user.Role = dto.Role;
-        }
- 
-        if (user.IsActive != dto.IsActive)
-        {
-            changed.Add($"IsActive: {user.IsActive} → {dto.IsActive}");
-            user.IsActive = dto.IsActive;
-        }
- 
-        // Không có gì thay đổi — không cần SaveChanges
-        if (changed.Count == 0)
-            return new UserResponseDTO
-            {
-                Id       = user.Id,
-                Name     = user.Name,
-                Phone    = user.Phone,
-                Email    = user.Email,
-                Role     = user.Role,
-                IsActive = user.IsActive,
-                Avatar   = user.Avatar,
-            };
- 
-        await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation(
-            "Admin updated user. TargetUserId={TargetUserId} Changes=[{Changes}]",
-            targetUserId, string.Join(", ", changed));
- 
-        return new UserResponseDTO
-        {
-            Id       = user.Id,
-            Name     = user.Name,
-            Phone    = user.Phone,
-            Email    = user.Email,
-            Role     = user.Role,
-            IsActive = user.IsActive,
-            Avatar   = user.Avatar,
-        };
-    }
-    
+
     // DELETE
     public async Task DeleteAsync(Guid userId, CancellationToken ct)
     {
