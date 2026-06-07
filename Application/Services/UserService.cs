@@ -46,12 +46,13 @@ public class UserService(
         };
     }
 
-    // PROFILE
-    public async Task<UserDto> Profile(Guid userId, CancellationToken ct)
+    // 
+    public async Task<UserDto> UserByIdAsync(Guid userId, CancellationToken ct)
     {
         var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-            ?? throw new NotFoundException("Account not found");
- 
+        if (!user)
+            throw new NotFoundException("Account not found", userId);
+
         return new UserDto
         {
             Id     = user.Id,
@@ -63,11 +64,12 @@ public class UserService(
         };
     }
 
-    // BY ID
-    public async Task<UserDto> ByIdAsync(Guid userId, CancellationToken ct)
+    // PROFILE
+    public async Task<UserDto> Profile(Guid userId, CancellationToken ct)
     {
         var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-            ?? throw new NotFoundException("Account not found");
+        if (!user)
+            throw new NotFoundException("Account not found", userId);
  
         return new UserDto
         {
@@ -118,18 +120,63 @@ public class UserService(
         };
     }
 
+    public async Task<UserDto> UpdateProfileAsync(
+        UpdateUserDTO dto, Guid userId, CancellationToken ct)
+    {
+        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
+            ?? throw new NotFoundException("Account not found", userId);
+
+        user.Name = dto.Name;
+ 
+        await userRepo.SaveChangesAsync(ct);
+ 
+        logger.LogInformation($"User: {UserId} updated");
+ 
+        return new UserDto
+        {
+            Id     = user.Id,
+            Avatar = user.Avatar,
+            Name   = user.Name,
+            Phone  = user.Phone,
+            Email  = user.Email,
+            Role   = user.Role,
+        };
+    }
+
+    public async Task<UserDto> UpdateAsync(UpdateUserDTO dto, Guid userId, CancellationToken ct)
+    {
+        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
+        if (user is null)
+            throw new NotFoundException("Account not found");
+
+        user.Name = dto.Name;
+ 
+        await userRepo.SaveChangesAsync(ct);
+ 
+        logger.LogInformation($"User: {UserId} updated");
+ 
+        return new UserDto
+        {
+            Id     = user.Id,
+            Avatar = user.Avatar,
+            Name   = user.Name,
+            Phone  = user.Phone,
+            Email  = user.Email,
+            Role   = user.Role,
+        };
+    }
+
     // UPLOAD AVATAR
     public async Task<string> UploadAvatarAsync(IFormFile file, Guid userId, CancellationToken ct)
     {
         var user = await userRepo.FirstOrDefaultAsync(userId, ct)
             ?? throw new NotFoundException("Account not found");
  
-        // Validate file
         var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp" };
         if (!allowedTypes.Contains(file.ContentType))
             throw new BadRequestException("Chỉ hỗ trợ file JPG, PNG, WEBP");
  
-        const long maxSize = 5 * 1024 * 1024;  // 5MB
+        const long maxSize = 5 * 1024 * 1024;
         if (file.Length > maxSize)
             throw new BadRequestException("File không được vượt quá 5MB");
  
@@ -146,84 +193,45 @@ public class UserService(
         return path;
     }
 
-    public async Task<UserResponseDTO> UpdateAsync(
+    public async Task<UserDto> UpdatePhoneAsync(
         UpdateUserDTO dto, Guid userId, CancellationToken ct)
     {
         var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-            ?? throw new NotFoundException("Account", userId);
- 
+            ?? throw new NotFoundException("Account not found", userId);
+
         user.Name = dto.Name;
  
         await userRepo.SaveChangesAsync(ct);
  
-        logger.LogInformation("User updated. UserId={UserId}", userId);
+        logger.LogInformation($"User: {UserId} updated");
  
-        return new UserResponseDTO
+        return new UserDto
         {
             Id     = user.Id,
+            Avatar = user.Avatar,
             Name   = user.Name,
             Phone  = user.Phone,
             Email  = user.Email,
             Role   = user.Role,
-            Avatar = user.Avatar,
         };
     }
- 
-    public async Task<UserResponseDTO> AdminUpdateAsync(
-        AdminUpdateUserDTO dto, Guid targetUserId, CancellationToken ct)
+
+    public async Task UpdatePasswordAsync(ChangePasswordDto dto, Guid userId, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(targetUserId, ct)
-            ?? throw new NotFoundException("Account", targetUserId);
+        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
+        if (user is null)
+            throw new NotFoundException("Account not found");
  
-        var changed = new List<string>();
+        if (!BCrypt.Net.BCrypt.Verify(dto.OldPassword, user.Password))
+            throw new BadRequestException("Mật khẩu hiện tại không đúng");
  
-        if (user.Name != dto.Name)
-        {
-            changed.Add($"Name: {user.Name} → {dto.Name}");
-            user.Name = dto.Name;
-        }
+        if (BCrypt.Net.BCrypt.Verify(dto.NewPassword, user.Password))
+            throw new BadRequestException("Mật khẩu mới không được trùng mật khẩu cũ");
  
-        if (user.Role != dto.Role)
-        {
-            changed.Add($"Role: {user.Role} → {dto.Role}");
-            user.Role = dto.Role;
-        }
- 
-        if (user.IsActive != dto.IsActive)
-        {
-            changed.Add($"IsActive: {user.IsActive} → {dto.IsActive}");
-            user.IsActive = dto.IsActive;
-        }
- 
-        // Không có gì thay đổi — không cần SaveChanges
-        if (changed.Count == 0)
-            return new UserResponseDTO
-            {
-                Id       = user.Id,
-                Name     = user.Name,
-                Phone    = user.Phone,
-                Email    = user.Email,
-                Role     = user.Role,
-                IsActive = user.IsActive,
-                Avatar   = user.Avatar,
-            };
- 
+        user.Password = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
         await userRepo.SaveChangesAsync(ct);
  
-        logger.LogInformation(
-            "Admin updated user. TargetUserId={TargetUserId} Changes=[{Changes}]",
-            targetUserId, string.Join(", ", changed));
- 
-        return new UserResponseDTO
-        {
-            Id       = user.Id,
-            Name     = user.Name,
-            Phone    = user.Phone,
-            Email    = user.Email,
-            Role     = user.Role,
-            IsActive = user.IsActive,
-            Avatar   = user.Avatar,
-        };
+        logger.LogInformation($"UserId={UserId} updated password");
     }
     
     // DELETE
@@ -238,25 +246,5 @@ public class UserService(
         await userRepo.SaveChangesAsync(ct);
  
         logger.LogInformation($"User:{userId} deleted}");
-    }
-
-    public async Task<(bool Success, string Message)> ChangePasswordAsync(ClaimsPrincipal principal, ChangePasswordDTO dto)
-    {
-        var userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (userId == null) return (false, "Unauthorized");
-
-        var user = await _context.Users.FindAsync(Guid.Parse(userId));
-        if (user == null) return (false, "User not found");
-
-        if (!BCrypt.Net.BCrypt.Verify(dto.OldPassword, user.PasswordHash))
-            return (false, "Old password is incorrect");
-
-        if (dto.NewPassword != dto.ConfirmPassword)
-            return (false, "Passwords do not match");
-
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
-        await _context.SaveChangesAsync();
-
-        return (true, "Password changed successfully");
     }
 }

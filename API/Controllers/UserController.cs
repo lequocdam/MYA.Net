@@ -20,6 +20,18 @@ public class UserController(IUserService userService) : ControllerBase
         });
     }
 
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> ById(CancellationToken ct)
+    {
+        var user = await userService.ByIdAsync(userId, ct);
+
+        return Ok(new ApiResponse<UserDto>
+        {
+            Message = "",
+            Data    = user,
+        });
+    }
+
     [HttpGet("profile")]
     public async Task<IActionResult> Profile(CancellationToken ct)
     {
@@ -34,7 +46,7 @@ public class UserController(IUserService userService) : ControllerBase
     
     [HttpGet("{id:guid}")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> ById(Guide id, CancellationToken ct)
+    public async Task<IActionResult> UserById(Guide id, CancellationToken ct)
     {
         var user = await userService.ByIdAsync(id, ct);
 
@@ -69,16 +81,9 @@ public class UserController(IUserService userService) : ControllerBase
     }
 
     [HttpPut("profile")]
-    public async Task<IActionResult> UpdateProfile(
-        [FromBody] UpdateUserDTO Dto
-        [FromServices] IValidator<UpdateUserDTO> validator,
-        CancellationToken ct)
+    public async Task<IActionResult> UpdateProfile(Guide id, CancellationToken ct)
     {
-        var validate = await validator.ValidateAsync(dto);
-        if (!validate.IsValid)
-            return BadRequest(validate.Errors.Select(e => new { property = e.PropertyName, message = e.ErrorMessage }));
-
-        var user = await userService.UpdateAsync(dto, userId, ct);
+        var user = await userService.UpdateProfileAsync(id, ct);
 
         return Ok(new ApiResponse<UserDto>
         {
@@ -89,18 +94,18 @@ public class UserController(IUserService userService) : ControllerBase
 
     [HttpPut("{id:guid}")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> UpdateById(Guide id, CancellationToken ct)
+    public async Task<IActionResult> Update(Guide id, CancellationToken ct)
     {
-        var user = await userService.ByIdAsync(id, ct);
+        var user = await userService.UpdateAsync(id, ct);
 
         return Ok(new ApiResponse<UserDto>
         {
-            Message = "",
+            Message = "Account updated",
             Data    = user,
         });
     }
 
-    [HttpPost("me/avatar")]
+    [HttpPost("profile/avatar")]
     public async Task<IActionResult> UploadAvatar(
         IFormFile file, CancellationToken ct)
     {
@@ -108,9 +113,9 @@ public class UserController(IUserService userService) : ControllerBase
         return Ok(new { Avatar = path });
     }
 
-    [HttpPut("me/password")]
+    [HttpPut("profile/password")]
     public async Task<IActionResult> ChangePassword(
-        [FromBody] ChangePasswordDTO dto, CancellationToken ct)
+        [FromBody] ChangePasswordDto dto, CancellationToken ct)
     {
         await userService.ChangePasswordAsync(dto, CurrentUserId, ct);
         return NoContent();
