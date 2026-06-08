@@ -1,13 +1,13 @@
 public class UserService(
-    IUserRepository userRepo,
+    IUserRepository userRepository,
     IFileService fileService,
     ILogger<UserService> logger) : IUserService
 {
 
-    // ALL
-    public async Task<Page<UserDto>> AllAsync(UserFilterDto filter, CancellationToken ct)
+    // GET ALL
+    public async Task<Page<UserDto>> GetAllAsync(UserFilterDto filter, CancellationToken ct)
     {
-        var query = userRepo.Query();
+        var query = userRepository.Query();
 
         if (!string.IsNullOrWhiteSpace(filter.Name))
             query = query.Where(u => u.Name.Contains(filter.Name));
@@ -46,12 +46,12 @@ public class UserService(
         };
     }
 
-    // 
-    public async Task<UserDto> UserByIdAsync(Guid userId, CancellationToken ct)
+    // GET DETAIL
+    public async Task<UserDto> GetDetailAsync(Guid id, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-        if (!user)
-            throw new NotFoundException("Account not found", userId);
+        var user = await userRepository.SelectByIdAsync(id, ct);
+        if (user is null)
+            throw new NotFoundException("Account not found");
 
         return new UserDto
         {
@@ -64,12 +64,12 @@ public class UserService(
         };
     }
 
-    // PROFILE
-    public async Task<UserDto> Profile(Guid userId, CancellationToken ct)
+    // GET PROFILE
+    public async Task<UserDto> GetDetailAsync(Guid userId, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-        if (!user)
-            throw new NotFoundException("Account not found", userId);
+        var user = await userRepository.SelectByIdAsync(userId, ct);
+        if (user is null)
+            throw new NotFoundException("Account not found");
  
         return new UserDto
         {
@@ -82,24 +82,25 @@ public class UserService(
         };
     }
 
+    // CREATE
     public async Task<UserDTO> CreateAsync(CreateUserDtO dto, CancellationToken ct)
     {
-        var exist = await userRepo.AnyAsync(dto.Phone, dto.Email, ct);
-        if (exist)
+        var exists = await userRepository.AnyAsync(dto.Phone, dto.Email, ct);
+        if (exists)
             throw new ConflictException("Phone or email created");
 
-        var hashPass = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+        var hashedPassword = BCrypt.Net.BCrypt.HashPassword(dto.Password);
         var user = new User
         {
             Id = Guid.NewGuid(),
             Name = dto.Name,
             Phone = dto.Phone,
             Email = dto.Email,
-            Password = hashPass,
-            Role = Role.USER,
+            Password = hashedPassword,
+            Role = dto.Role,
         };
 
-        await userRepo.Add(user, ct);
+        await userRepository.Add(user, ct);
 
         try
         {
@@ -107,7 +108,7 @@ public class UserService(
         }
         catch (DbUpdateException e)
         {
-            logger.LogWarning(e, $"Duplicate user for {user.Phone} or {user.Email}");
+            logger.LogWarning($"Duplicate user for {user.Phone} or {user.Email}", e);
             throw new ConflictException("Phone or email created");
         }
 
@@ -120,17 +121,31 @@ public class UserService(
         };
     }
 
-    public async Task<UserDto> UpdateProfileAsync(
-        UpdateUserDTO dto, Guid userId, CancellationToken ct)
+    public async Task<UserDto> UpdateAsync(UpdateUserDto dto, Guid id, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-            ?? throw new NotFoundException("Account not found", userId);
+        var user = await userRepository.SelectByIdAsync(id, ct);
+        if (user is null)
+            throw new NotFoundException("Account not found");
+
+        var exists = await userRepository.AnyAsync(dto.Phone, dto.Email, ct);
+        if (exists)
+            throw new ConflictException("Phone or email created");
 
         user.Name = dto.Name;
+        user.Phone = dto.Phone;
+        user.Email = dto.Email;
  
-        await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation($"User: {UserId} updated");
+        try
+        {
+            await userRepository.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException e)
+        {
+            logger.LogWarning(e, "Phone or email duplicated", user.Phone, user.Email);
+            throw new ConflictException("Phone or email created");
+        }
+
+        logger.LogInformation("Account {Id} updated", id);
  
         return new UserDto
         {
@@ -143,17 +158,32 @@ public class UserService(
         };
     }
 
-    public async Task<UserDto> UpdateAsync(UpdateUserDTO dto, Guid userId, CancellationToken ct)
+    // ACTIVATE 
+    public async Task ActivateAsync(Guid id, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
+        var user = await userRepository.SelectByIdAsync(id, ct);
+        if (user is null)
+            throw new NotFoundException("Account not found");
+
+        if (user.IsActive)
+            throw new BadRequestException("Account deleted");
+ 
+        user.IsActive = true;
+
+        await userRepository.SaveChangesAsync(ct);
+        logger.LogInformation("Account {Id} activated", id);
+    }
+
+    public async Task<UserDto> UpdateProfileAsync(UpdateProfileDto dto, Guid userId, CancellationToken ct)
+    {
+        var user = await userRepository.SelectByIdAsync(userId, ct);
         if (user is null)
             throw new NotFoundException("Account not found");
 
         user.Name = dto.Name;
  
         await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation($"User: {UserId} updated");
+        logger.LogInformation("User {Id} updated", userId);
  
         return new UserDto
         {
@@ -193,58 +223,37 @@ public class UserService(
         return path;
     }
 
-    public async Task<UserDto> UpdatePhoneAsync(
-        UpdateUserDTO dto, Guid userId, CancellationToken ct)
+    public async Task ChangePasswordAsync(ChangePasswordDto dto, Guid userId, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
-            ?? throw new NotFoundException("Account not found", userId);
-
-        user.Name = dto.Name;
- 
-        await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation($"User: {UserId} updated");
- 
-        return new UserDto
-        {
-            Id     = user.Id,
-            Avatar = user.Avatar,
-            Name   = user.Name,
-            Phone  = user.Phone,
-            Email  = user.Email,
-            Role   = user.Role,
-        };
-    }
-
-    public async Task UpdatePasswordAsync(ChangePasswordDto dto, Guid userId, CancellationToken ct)
-    {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
+        var user = await userRepository.SelectByIdAsync(userId, ct);
         if (user is null)
             throw new NotFoundException("Account not found");
  
         if (!BCrypt.Net.BCrypt.Verify(dto.OldPassword, user.Password))
-            throw new BadRequestException("Mật khẩu hiện tại không đúng");
+            throw new BadRequestException("Current password is incorrect");
  
         if (BCrypt.Net.BCrypt.Verify(dto.NewPassword, user.Password))
-            throw new BadRequestException("Mật khẩu mới không được trùng mật khẩu cũ");
+            throw new BadRequestException("New password must be different from current password");
  
         user.Password = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
-        await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation($"UserId={UserId} updated password");
+
+        await userRepository.SaveChangesAsync(ct);
+        logger.LogInformation("Account {Id} updated password", userId);
     }
     
     // DELETE
-    public async Task DeleteAsync(Guid userId, CancellationToken ct)
+    public async Task DeleteAsync(Guid id, CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(userId, ct)
+        var user = await userRepository.SelectByIdAsync(id, ct);
         if (user is null)
             throw new NotFoundException("Account not found");
+
+        if (!user.IsActive)
+            throw new BadRequestException("Account deleted");
  
         user.IsActive = false;
 
-        await userRepo.SaveChangesAsync(ct);
- 
-        logger.LogInformation($"User:{userId} deleted}");
+        await userRepository.SaveChangesAsync(ct);
+        logger.LogInformation("Account {Id} deleted}", id);
     }
 }

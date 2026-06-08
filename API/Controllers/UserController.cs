@@ -8,7 +8,7 @@ public class UserController(IUserService userService) : ControllerBase
 
     [HttpGet]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> All(
+    public async Task<IActionResult> GetAll(
         [FromQuery] UserFilterDTO filter, CancellationToken ct)
     {
         var pageUsers = await userService.AllAsync(filter, ct);
@@ -21,86 +21,86 @@ public class UserController(IUserService userService) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> ById(CancellationToken ct)
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> GetDetail(Guid id, CancellationToken ct)
     {
-        var user = await userService.ByIdAsync(userId, ct);
+        var result = await userService.GetDetailAsync(id, ct);
 
         return Ok(new ApiResponse<UserDto>
         {
-            Message = "",
-            Data    = user,
+            Message = "Account detail got",
+            Data    = result,
         });
     }
 
     [HttpGet("profile")]
-    public async Task<IActionResult> Profile(CancellationToken ct)
+    public async Task<IActionResult> GetProfile(CancellationToken ct)
     {
-        var user = await userService.ProfileAsync(userId, ct);
+        var result = await userService.GetProfileAsync(userId, ct);
 
         return Ok(new ApiResponse<UserDto>
         {
-            Message = "",
-            Data    = user,
-        });
-    }
-    
-    [HttpGet("{id:guid}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> UserById(Guide id, CancellationToken ct)
-    {
-        var user = await userService.ByIdAsync(id, ct);
-
-        return Ok(new ApiResponse<UserDto>
-        {
-            Message = "",
-            Data    = user,
+            Message = "Account profile got",
+            Data    = result,
         });
     }
 
     [HttpPost]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Create(
-        [FromBody] CreateUserDTO dto,
-        [FromServices] IValidator<CreateUserDTO> validator,
+    public async Task<IActionResult> Post(
+        [FromBody] CreateUserDto dto,
+        [FromServices] IValidator<CreateUserDto> validator,
         CancellationToken ct)
     {
         var validate = await validator.ValidateAsync(dto);
         if (!validate.IsValid)
             return BadRequest(validate.Errors.Select(e => new { property = e.PropertyName, message = e.ErrorMessage }));
 
-        var user = await userService.CreateAsync(dto, ct);
-
-        return CreatedAtAction(
-            nameof(ById),
-            new { id = user.Id },
-            new ApiResponse<UserDTO>
-            {
-                Message = "Account created",
-                Data = user
-            });
-    }
-
-    [HttpPut("profile")]
-    public async Task<IActionResult> UpdateProfile(Guide id, CancellationToken ct)
-    {
-        var user = await userService.UpdateProfileAsync(id, ct);
+        var result = await userService.CreateAsync(dto, ct);
 
         return Ok(new ApiResponse<UserDto>
         {
-            Message = "Account updated",
-            Data    = user,
+            Message = "Account created",
+            Data    = result,
         });
     }
 
     [HttpPut("{id:guid}")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Update(Guide id, CancellationToken ct)
+    public async Task<IActionResult> Put(
+        [FromBody] UpdateUserDto dto,
+        Guide id, 
+        CancellationToken ct)
     {
-        var user = await userService.UpdateAsync(id, ct);
+        var result = await userService.UpdateAsync(dto, id, ct);
 
         return Ok(new ApiResponse<UserDto>
         {
             Message = "Account updated",
+            Data    = result,
+        });
+    }
+
+    [HttpPut("{id:guid}/activate")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> Activate(
+        Guide id, 
+        CancellationToken ct)
+    {
+        await userService.ActivateAsync(id, ct);
+        return NoContent();
+    }
+
+    [HttpPut("profile")]
+    public async Task<IActionResult> PutProfile(
+        [FromBody] UpdateUserDto dto,
+        CancellationToken ct)
+    {
+        var user = await userService.UpdateProfileAsync(dto, userId, ct);
+
+        return Ok(new ApiResponse<UserDto>
+        {
+            Message = "Account profile updated",
             Data    = user,
         });
     }
@@ -115,13 +115,13 @@ public class UserController(IUserService userService) : ControllerBase
 
     [HttpPut("profile/password")]
     public async Task<IActionResult> ChangePassword(
-        [FromBody] ChangePasswordDto dto, CancellationToken ct)
+        [FromBody] ChangePasswordDto dto, 
+        CancellationToken ct)
     {
-        await userService.ChangePasswordAsync(dto, CurrentUserId, ct);
+        await userService.ChangePasswordAsync(dto, userId, ct);
         return NoContent();
     }
 
-    // DELETE
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
