@@ -1,4 +1,4 @@
-public class DbContext(DbContextOptions<DbContext> options) : DbContext(options)
+public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Refresh> Refreshs => Set<Refresh>();
@@ -8,16 +8,34 @@ public class DbContext(DbContextOptions<DbContext> options) : DbContext(options)
         b.Entity<User>(e =>
         {
             e.HasKey(u => u.Id);
-            e.HasIndex(u => u.Avatar);
-            e.HasIndex(u => u.Name);
-            e.HasIndex(u => u.Phone).IsUnique();
-            e.HasIndex(u => u.Email).IsUnique();
-            e.Property(u => u.Role).HasDefaultValue("user");
 
-            e.HasMany(u => u.RefreshTokens)
-             .WithOne(t => t.User)
-             .HasForeignKey(t => t.UserId)
-             .OnDelete(DeleteBehavior.Cascade);
+            e.Property(u => u.Avatar)
+                .HasMaxLength(500);
+
+            e.Property(u => u.Name)
+                .HasMaxLength(100)
+                .IsRequired();
+
+            e.Property(u => u.Phone)
+                .HasMaxLength(10)
+                .IsRequired();
+
+            e.HasIndex(u => u.Phone)
+                .IsUnique();
+
+            e.Property(u => u.Email)
+                .HasMaxLength(255)
+                .IsRequired();
+
+            e.HasIndex(u => u.Email)
+                .IsUnique();
+
+            e.Property(u => u.Password)
+                .HasMaxLength(255)
+                .IsRequired();
+
+            e.Property(u => u.Role)
+                .HasDefaultValue("user");
         });
 
         b.Entity<RefreshToken>(e =>
