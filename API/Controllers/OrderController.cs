@@ -1,21 +1,16 @@
 [ApiController]
 [Route("api/orders")]
 [Authorize]
-public class OrderController : ControllerBase
+public class OrderController(
+    IOrderService orderService;
+) : ControllerBase
 {
-    private readonly IOrderService _orderService;
-
-    public OrderController(IOrderService orderService)
-    {
-        _orderService = orderService;
-    }
-
-    private Guid CurrentUserId =>
+    private Guid userId =>
         Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-    // GET /api/orders?status=Pending&page=1&pageSize=20
     [HttpGet]
-    public async Task<IActionResult> GetList([FromQuery] OrderFilterDTO filter)
+    [Authorize(Roles = "User, Admin")]
+    public async Task<IActionResult> GetAll([FromQuery] OrderFilterDTO filter)
     {
         var result = await _orderService.GetList(filter, CurrentUserId);
         return Ok(result);
@@ -29,12 +24,20 @@ public class OrderController : ControllerBase
         return Ok(order);
     }
 
-    // POST /api/orders
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateOrderDTO dto)
+    [Authorize(Roles = "User, Admin")]
+    public async Task<IActionResult> Post(
+        [FromBody] CreateOrderDto dto,
+        [FromServices] IValidator<CreateOrderDto> validator,
+        CancellationToken ct)
     {
-        var order = await _orderService.Create(dto, CurrentUserId);
-        return CreatedAtAction(nameof(GetById), new { id = order.Id }, new { order.Id, order.Code });
+        var result = await orderService.CreateAsync(dto, userId, ct);
+
+        return Ok(new ApiResponse<OrderDto>
+        {
+            Message = "Đã tạo đơn hàng",
+            Data    = result,
+        });
     }
 
     // DELETE /api/orders/{id}

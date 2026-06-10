@@ -1,5 +1,5 @@
 public class AuthService(
-    IUserRepository userRepo,
+    IUserRepository userRepository,
     IOtpService otpService,
     ITokenService tokenService,
     IRefreshService refresh,
@@ -9,17 +9,13 @@ public class AuthService(
     private const int RefreshDays     = 7;
 
     // REGISTER
-    public async Task<EmailDto> RegisterAsync(RegisterDTO dto, CancellationToken ct)
+    public async Task RegisterAsync(RegisterDto dto, CancellationToken ct)
     {
-        var exist = await userRepo.AnyAsync(dto.Phone, dto.Email, ct);
-        if (exist)
+        var exists = await userRepository.SelectByPhoneOrEmailAsync(dto.Phone, dto.Email, ct);
+        if (exists)
             throw new ConflictException("Phone or email registered");
 
-        var maskEmail = await otpService.SendOtpAsync(dto, ct);
-
-        return new EmailDto{
-            Email  = email,
-        };
+        await otpService.SendOtpAsync(dto, ct);
     }
 
     // RESEND OTP
@@ -38,24 +34,27 @@ public class AuthService(
             Phone = userCache.Phone,
             Email = userCache.Email,
             Password = userCache.Password,
-            Role = Role.USER,
+            Role = Roles.USER,
         };
 
-        await userRepo.Add(user, ct);
+        await userRepository.Add(user, ct);
 
         try
         {
-            await userRepo.SaveChangesAsync(ct);
+            await userRepository.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException e)
         {
-            logger.LogWarning(ex,"Duplicate user for {Phone} or {Email}",dto.Phone, dto.Email);
-
+            logger.LogWarning("{Phone} or {Email} duplicated", user.Phone, user.Email, e);
             throw new ConflictException("Phone or email registered");
         }
 
         return new UserDto{
             Id = user.Id,
+            Avatar = user.Avatar,
+            Name = user.Name,
+            Phone = user.Phone,
+            Email = user.Email,
             Role = user.Role,
         };
     }

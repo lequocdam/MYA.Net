@@ -5,13 +5,11 @@ public class AuthController(IAuthService authService) : ControllerBase
     private Guid UserId =>
         Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-    private const string Ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-
     [HttpPost("register")]
     [EnableRateLimiting("register")]
     public async Task<IActionResult> Register(
-        [FromBody] RegisterDTO dto,
-        [FromServices] IValidator<RegisterDTO> validator,
+        [FromBody] RegisterDto dto,
+        [FromServices] IValidator<RegisterDto> validator,
         CancellationToken ct)
     {
         var validate = await validator.ValidateAsync(dto);
@@ -19,27 +17,41 @@ public class AuthController(IAuthService authService) : ControllerBase
             return BadRequest(validate.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
 
         await authService.RegisterAsync(dto, ct);
-        return Ok(new APIResponse<T>
-        {
-            Message = "OTP sent to email",
-        });
+        return NoContent();
     }
 
-    [HttpPost("verify")]
-    public async Task<IActionResult> VerifyOTPAsync(
-        [FromBody] OTPDTO dto,
-        [FromServices] IValidator<OTPDTO> validator,
+    [HttpPost("resend")]
+    [EnableRateLimiting("resend")]
+    public async Task<IActionResult> ResendOtp(
+        [FromBody] ResendOtpDto dto,
+        [FromServices] IValidator<ResendOtpDto> validator,
         CancellationToken ct)
     {
         var validate = await validator.ValidateAsync(dto);
         if (!validate.IsValid)
             return BadRequest(validate.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
 
-        var acc = await authService.VerifyOTPAsync(dto, ct);
-        return Created(new ApiResponse<UserDTO>
+        await authService.ResendOtpAsync(dto, ct);
+        return NoContent();
+    }
+
+    [HttpPost("verify")]
+    [EnableRateLimiting("verify")]
+    public async Task<IActionResult> VerifyOtpAsync(
+        [FromBody] OtpDto dto,
+        [FromServices] IValidator<OtpDto> validator,
+        CancellationToken ct)
+    {
+        var validate = await validator.ValidateAsync(dto);
+        if (!validate.IsValid)
+            return BadRequest(validate.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
+
+        var result = await authService.VerifyOtpAsync(dto, ct);
+
+        return Ok(new ApiResponse<UserDto>
         {
-            Message = "Account created",
-            Data = acc,
+            Message = "",
+            Data = result,
         });
     }
 

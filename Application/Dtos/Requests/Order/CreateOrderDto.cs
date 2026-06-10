@@ -1,10 +1,10 @@
-public class CreatedOrderDTO
+public class CreatedOrderDto
 {
     public Address Sender { get; set; }
 
     public Address Receiver { get; set; }
 
-    public string CategoryId { get; set; }
+    public Guid ServiceId { get; set; }
 
     public List<Item> Items { get; set; }
 }

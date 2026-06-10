@@ -1,6 +1,6 @@
-public class OTPDTO
+public class OtpDto
 {
     public string Email { get; set; }
 
-    public string OTP { get; set; }
+    public string Otp { get; set; }
 }

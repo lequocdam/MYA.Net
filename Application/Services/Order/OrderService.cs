@@ -1,40 +1,17 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
-public class OrderService : IOrderService
+public class OrderService(
+    IOrderRepository orderRepository,
+    IAddressService addressService,
+    IZoneService zoneService,
+    IWeightService _weightService,
+    IEventBus eventBus,
+    ILogger<OrderService> logger) : IOrderService
 {
-    private readonly AppDbContext _context;
-    private readonly IAddressService _addressService;
-    private readonly IZoneService _zoneService;
-    private readonly IWeightService _weightService;
-    private readonly IPriceService _priceService;
-    private readonly IEventBus _eventBus;
-    private readonly ILogger<OrderService> _logger;
-
-    public OrderService(
-        AppDbContext context,
-        IAddressService addressService,
-        IZoneService zoneService,
-        IWeightService weightService,
-        IPriceService priceService,
-        IEventBus eventBus,
-        ILogger<OrderService> logger)
+    public async Task<OrderPage<OrderDTO>> GetAllAsync(UserFilterDto filter, CancellationToken ct Guid userId)
     {
-        _context        = context;
-        _addressService = addressService;
-        _zoneService    = zoneService;
-        _weightService  = weightService;
-        _priceService   = priceService;
-        _eventBus       = eventBus;
-        _logger         = logger;
-    }
-
-    // GET ALL
-    public async Task<OrderPage<OrderDTO>> GetAll(FilterDTO filter, Guid userId)
-    {
-        var query = _context.Orders
-            .AsNoTracking()
-            .Where(o => o.UserId == userId);
+        var query = orderRepository.Query();
 
         if (filter.Status.HasValue)
             query = query.Where(o => o.Status == filter.Status.Value);
@@ -42,11 +19,11 @@ public class OrderService : IOrderService
         if (!string.IsNullOrWhiteSpace(filter.Code))
             query = query.Where(o => o.Code.Contains(filter.Code));
 
-        if (filter.From.HasValue)
-            query = query.Where(o => o.Date >= filter.From.Value);
+        if (filter.FromDate.HasValue)
+            query = query.Where(o => o.Date >= filter.FromDate.Value);
 
-        if (filter.To.HasValue)
-            query = query.Where(o => o.Date <= filter.To.Value);
+        if (filter.ToDate.HasValue)
+            query = query.Where(o => o.Date <= filter.ToDate.Value);
 
         var total = await query.CountAsync();
 
@@ -124,17 +101,33 @@ public class OrderService : IOrderService
         return order;
     }
 
-    // CREATE
-    public async Task<OrderDTO> CreateAsync(OrderCreatingDto dto, Guid userId)
+    public async Task<OrderDto> CreateAsync(CreateOrderDto dto, Guid userId, CancellationToken ct)
     {
-        using var transaction = await db.Database.BeginTransactionAsync();
+        var transaction = await orderRepository.BeginTransactionAsync();
 
         try
         {
-            var sender   = await addressService.CreateAsync(dto.Sender);
-            var receiver = await addressService.CreateAsync(dto.Receiver);
+            var sender = addressService.CreateAsync(new Address
+            {
+                Id      = Guid.NewGuid(),
+                Name    = dto.Sender.Name,
+                Phone   = dto.Sender.Phone,
+                Email   = dto.Sender.Email,
+                Address = dto.Sender.Address,
+            });
+
+            var receiver = addressService.CreateAsync(new Address
+            {
+                Id = Guid.NewGuid(),
+                Name    = dto.Receiver.Name,
+                Phone   = dto.Receiver.Phone,
+                Email   = dto.Receiver.Email,
+                Address = dto.Receiver.Address,
+            });
+
             var items = dto.Items.Select(i => new Item
             {
+                Id = Guid.NewGuid(),
                 Image    = i.Image,
                 Name     = i.Name,
                 Type     = i.Type,
@@ -145,68 +138,69 @@ public class OrderService : IOrderService
                 Height   = i.Height,
             }).ToList()
 
-            var zone   = _zoneService.Get(sender, receiver);
-            var weight = _weightService.Calculate(items);
-            var price  = _priceService.Calculate(zone, weight);
-
-            var now   = DateTime.UtcNow;
+            var zone   = zoneService.GetAsync(sender, receiver);
+            var weight = weightService.CalculateAsync(items);
+            var price  = priceService.CalculateAsync(zone, weight);
 
             var order = new Order
             {
-                Code       = await GenerateCode(),
+                Id         = Guid.NewGuid(),
+                Code       = GenerateCode(),
                 SenderId   = sender.Id,
                 ReceiverId = receiver.Id,
-                Category   = dto.Category,
+                ServiceId  = dto.ServiceId,
                 Cost       = price.Cost,
                 Fee        = price.Fee,
                 Total      = price.Total,
                 Status     = OrderStatus.PENDING,
-                Date       = now,
+                Date       = DateTime.UtcNow,
                 UserId     = userId,
                 Items      = items,
             };
 
-            _context.Orders.Add(order);
+            orderRepository.Add(order);
 
-            _context.OrderHistories.Add(new OrderHistory
+            orderHistoryService.CreateAsync(new OrderHistory
             {
-                OrderId = order.Id,
+                Id = Guid.NewGuid(),
                 Note    = "Đã tạo đơn hàng",
-                Status  = OrderStatus.PENDING,
-                Date    = now,
-                UserId  = userId,
-            });
-
-            _context.Tracking.Add(new Tracking
-            {
+                Date    = DateTime.UtcNow,
                 OrderId = order.Id,
-                Message = "Đơn hàng đã tạo thành công",
-                Status  = OrderStatus.PENDING,
-                Date    = now,
                 UserId  = userId,
             });
 
-            await _context.SaveChangesAsync();
+            trackingService.CreateAsync(new Tracking
+            {
+                Id = Guid.NewGuid(),
+                Message = "Đã tạo đơn hàng",
+                Date    = DateTime.UtcNow,
+                OrderId = order.Id,
+                UserId  = userId,
+            });
+
+            await orderRepository.SaveChangesAsync();
             await transaction.CommitAsync();
 
-            return new OrderDTO
+            return new OrderDto
             {
-                Code       = await GenerateCode(),
-                SenderId   = sender.Id,
-                ReceiverId = receiver.Id,
-                Category   = dto.Category,
-                Total      = price.Total,
-                Status     = OrderStatus.PENDING,
-                Date       = now,
-                UserId     = userId,
-                Items      = items,
+                Id         = order.Id,
+                Code       = order.Code,
+                SenderId   = order.SenderId,
+                ReceiverId = order.ReceiverId,
+                Service    = order.Service,
+                Cost       = order.Cost,
+                Fee        = order.Fee,
+                Total      = order.Total,
+                Status     = order.Status,
+                Date       = DateTime.UtcNow,
+                UserId     = order.UserId,
+                Items      = order.Items,
             };
         }
-        catch (Exception ex)
+        catch (Exception e)
         {
             await transaction.RollbackAsync();
-            _logger.LogError(ex, "Create order failed. UserId={UserId}", userId);
-            throw;
+            logger.LogError("Create order failed. UserId={UserId}", userId);
         }
     }
 
