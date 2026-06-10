@@ -40,6 +40,18 @@ public class OrderController(
         });
     }
 
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Put(
+        UpdateOrderDto dto,
+        Guid id,
+        CancellationToken ct)
+    {
+        await mediator.Send(new UpdateOrderCommand(dto, id, userId),
+            ct);
+
+        return NoContent();
+    }
+
     // DELETE /api/orders/{id}
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Cancel(Guid id, [FromBody] CancelOrderDTO dto)

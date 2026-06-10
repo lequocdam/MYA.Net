@@ -32,6 +32,8 @@ public class CreateOrderHandler(
             {
                 Id            = Guid.NewGuid(),
                 Code          = GenerateCode(),
+                Status        = OrderStatus.PENDING,
+                Date          = DateTime.UtcNow,
                 FromAddressId = dto.FromAddressId,
                 ToAddressId   = dto.ToAddressId,
                 ServiceId     = dto.ServiceId,
@@ -39,8 +41,6 @@ public class CreateOrderHandler(
                 Cost          = price.Cost,
                 Fee           = price.Fee,
                 Total         = price.Total,
-                Date          = DateTime.UtcNow,
-                Status        = OrderStatus.PENDING,
                 Items         = dto.Items
                     .Select(i => new Item
                     {

@@ -17,25 +17,11 @@ public class UpdateOrderHandler(
         try
         {
             var order = await orderRepository.FindAsync(request.OrderId, ct);
-
             if (order is null)
                 throw new NotFoundException("Order not found");
 
-            if (order.UserId != request.UserId)
-                throw new ForbiddenException(
-                    "Bạn không có quyền sửa đơn hàng này");
-
-            var allowedStatuses = new[]
-            {
-                OrderStatus.Pending,
-            };
-
-            if (!allowStatuses.Contains(order.Status))
-            {
-                throw new InvalidOrderTransitionException(
-                    order.Status,
-                    "Không thể cập nhật đơn khi đang vận chuyển");
-            }
+            if (order.Status != OrderStatus.PENDING)
+                throw new InvalidOrderTransitionException("");
 
             var dto = request.Dto;
 
@@ -43,37 +29,40 @@ public class UpdateOrderHandler(
             order.ToAddressId   = dto.ToAddressId;
             order.ServiceId = dto.ServiceId;
 
-            // Xóa item cũ
-            order.Items.Clear();
+            var removedItems = order.Items
+                .Where(x => dto.Items.All(i => i.Id != x.Id))
+                .ToList();
 
-            // Thêm item mới
-            foreach (var item in dto.Items)
+            foreach (var item in removedItems)
             {
-                order.Items.Add(new Item
-                {
-                    Id = Guid.NewGuid(),
-                    Image = item.Image,
-                    Name = item.Name,
-                    Type = item.Type,
-                    Quantity = item.Quantity,
-                    Weight = item.Weight,
-                    Length = item.Length,
-                    Width = item.Width,
-                    Height = item.Height
-                });
+                order.Items.Remove(item);
             }
 
-            var zone = zoneService.GetZone(
-                order.Sender,
-                order.Receiver);
+            foreach (var item in dto.Items)
+            {
+                var exitItem = order.Items.FirstOrDefault(i => i.Id == item.Id);
 
-            var weight =
-                weightService.Calculate(order.Items);
+                if (exitItem != null)
+                {
+                    exitItem.Name     = item.Name;
+                    exitItem.Quantity = item.Quantity;
+                    exitItem.Weight   = item.Weight;
+                }
+                else
+                {
+                    order.Items.Add(new Item
+                    {
+                        Id       = Guid.NewGuid(),
+                        Name     = item.Name,
+                        Quantity = item.Quantity,
+                        Weight   = item.Weight,
+                    });
+                }
+            }
 
-            var price =
-                priceService.Calculate(
-                    zone,
-                    weight);
+            var zone   = zoneService.GetZone(order.Sender, order.Receiver);
+            var weight = weightService.Calculate(order.Items);
+            var price  = priceService.Calculate(zone, weight);
 
             order.Cost = price.Cost;
             order.Fee = price.Fee;
