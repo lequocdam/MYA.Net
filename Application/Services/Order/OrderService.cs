@@ -9,96 +9,106 @@ public class OrderService(
     IEventBus eventBus,
     ILogger<OrderService> logger) : IOrderService
 {
-    public async Task<OrderPage<OrderDTO>> GetAllAsync(UserFilterDto filter, CancellationToken ct Guid userId)
+    public async Task<OrderPage<OrderDto>> GetAllAsync(
+        OrderFilterDto filter,
+        Guid userId,
+        CancellationToken ct)
     {
-        var query = orderRepository.Query();
-
-        if (filter.Status.HasValue)
-            query = query.Where(o => o.Status == filter.Status.Value);
+        var query = orderRepository
+            .Query()
+            .Where(o => o.UserId == userId);
 
         if (!string.IsNullOrWhiteSpace(filter.Code))
             query = query.Where(o => o.Code.Contains(filter.Code));
 
-        if (filter.FromDate.HasValue)
-            query = query.Where(o => o.Date >= filter.FromDate.Value);
+        if (filter.From.HasValue)
+            query = query.Where(o => o.Date >= filter.From.Value);
 
-        if (filter.ToDate.HasValue)
-            query = query.Where(o => o.Date <= filter.ToDate.Value);
+        if (filter.To.HasValue)
+            query = query.Where(o => o.Date <= filter.To.Value);
 
-        var total = await query.CountAsync();
+        if (filter.Status.HasValue)
+            query = query.Where(o => o.Status == filter.Status.Value);
+
+        var total = await query.CountAsync(ct);
+
+        var skip = (filter.Page - 1) * filter.PageSize;
 
         var orders = await query
             .OrderByDescending(o => o.Date)
-            .Skip((filter.Page - 1) * filter.PageSize)
+            .Skip(skip)
             .Take(filter.PageSize)
-            .Select(o => new OrderDTO
+            .Select(o => new OrderDto
             {
-                Id     = o.Id,
-                Code   = o.Code,
-                ReceiverName  = o.Receiver.Name,
-                ReceiverPhone = o.Receiver.Phone,
-                Category = o.Category,
-                Total  = o.Total,
-                Status = o.Status,
-                Date   = o.Date,
+                Id = o.Id,
+                Code = o.Code,
+                Date = o.Date,
+                FromId = o.FromId,
+                ToId = o.ToId,
+                ServiceId = o.ServiceId,
+                Total = o.Total,
+                Status = o.Status
             })
-            .ToListAsync();
+            .ToListAsync(ct);
 
-        return new OrderPage<OrderDTO>
+        return new OrderPage<OrderDto>
         {
-            Page     = filter.Page,
+            Page = filter.Page,
             PageSize = filter.PageSize,
-            Total    = total,
-            Orders    = orders,
+            Total = total,
+            Items = orders
         };
     }
 
-    // GET DETAIL
-    public async Task<Detail> GetDetail(Guid orderId, Guid userId)
+    public async Task<OrderDetailDto> GetDetailAsync(
+        Guid orderId, 
+        Guid userId,
+        CancellationToken ct)
     {
-        var order = await _context.Orders
-            .AsNoTracking()
-            .Include(o => o.Sender)
-            .Include(o => o.Receiver)
-            .Include(o => o.Items)
-            .Where(o => o.Id == orderId && o.UserId == userId)
-            .Select(o => new DetailDTO
+        return order = await orderRepository.Query()
+        .AsNoTracking()
+        .Select(o => new OrderDetailDto
+        {
+            Id = o.Id,
+            Code = o.Code,
+            Date = o.Date,
+            FromAddress = new AddressDto
             {
-                Id       = o.Id,
-                Code     = o.Code,
-                Sender   = new AddressDTO
+                Name = o.FromAddress.Name,
+                Phone = o.FromAddress.Phone,
+                Email = o.FromAddress.Email,
+                Address = o.FromAddress.Address,
+            },
+            ToAddress = new AddressDto
+            {
+                Name = o.ToAddress.Name,
+                Phone = o.ToAddress.Phone,
+                Email = o.ToAddress.Email,
+                Address = o.ToAddress.Address,
+            },
+            Service = new ServiceDto
+            {
+                Name = o.Service.Name,
+            },
+            Cost = o.Cost,
+            Fee = o.Fee,
+            Total = o.Total,
+            Status = o.Status,
+            Items = o.Items
+                .Select(i => new ItemDto
                 {
-                    Name    = o.Sender.Name,
-                    Phone   = o.Sender.Phone,
-                    Address = o.Sender.Address,
-                },
-                Receiver = new AddressDTO
-                {
-                    Name    = o.Receiver.Name,
-                    Phone   = o.Receiver.Phone,
-                    Address = o.Receiver.Address,
-                },
-                Category = o.Category,
-                Cost     = o.Cost,
-                Fee      = o.Fee,
-                Total    = o.Total,
-                Status   = o.Status,
-                Date     = o.Date,
-                Items = o.Items.Select(i => new ItemDTO
-                {
-                    Image    = i.Image,
-                    Name     = i.Name,
+                    Image = i.Image,
+                    Name = i.Name,
                     Quantity = i.Quantity,
-                    Weight   = i.Weight,
-                    Length   = i.Length,
-                    Width    = i.Width,
-                    Height   = i.Height,
-                }).ToList()
-            })
-            .FirstOrDefaultAsync()
-                ?? throw new NotFoundException("Order", orderId);
-
-        return order;
+                    Weight = i.Weight,
+                    Length = i.Length,
+                    Width = i.Width,
+                    Height = i.Height,
+                })
+                .ToList(ct)
+        })
+        .FirstOrDefaultAsync(o => o.Id == orderId && o.UserId == userId, ct)
+            ?? throw new NotFoundException("Order", orderId);
     }
 
     public async Task<OrderDto> CreateAsync(CreateOrderDto dto, Guid userId, CancellationToken ct)
@@ -125,18 +135,20 @@ public class OrderService(
                 Address = dto.Receiver.Address,
             });
 
-            var items = dto.Items.Select(i => new Item
-            {
-                Id = Guid.NewGuid(),
-                Image    = i.Image,
-                Name     = i.Name,
-                Type     = i.Type,
-                Quantity = i.Quantity,
-                Weight   = i.Weight,
-                Length   = i.Length,
-                Width    = i.Width,
-                Height   = i.Height,
-            }).ToList()
+            var items = dto.Items
+                .Select(i => new Items
+                {
+                    Id = Guid.NewGuid(),
+                    Image    = i.Image,
+                    Name     = i.Name,
+                    Type     = i.Type,
+                    Quantity = i.Quantity,
+                    Weight   = i.Weight,
+                    Length   = i.Length,
+                    Width    = i.Width,
+                    Height   = i.Height,
+                })
+                .ToList()
 
             var zone   = zoneService.GetAsync(sender, receiver);
             var weight = weightService.CalculateAsync(items);
