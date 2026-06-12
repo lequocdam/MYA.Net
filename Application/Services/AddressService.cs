@@ -22,6 +22,31 @@ public class AddressService
             .ToListAsync();
     }
 
+    public async Task<AddressDto> GetByInfoAsync(
+        string name,
+        string phone,
+        string email,
+        string address)
+    {
+        return await _context.Addresses
+            .Where(x =>
+                !x.IsDeleted &&
+                x.Name == name &&
+                x.Phone == phone &&
+                x.Email == email &&
+                x.Address == address)
+            .Select(x => new AddressDTO
+            {
+                Id = x.Id,
+                Name = x.Name,
+                Phone = x.Phone,
+                Email = x.Email,
+                Address = x.Address,
+                IsDefault = x.IsDefault
+            })
+            .FirstOrDefaultAsync();
+    }
+
     public async Task<AddressDTO> Create(CreatedAddressDTO dto, int userId)
     {
         if (dto.IsDefault)

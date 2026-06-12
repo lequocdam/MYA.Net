@@ -59,6 +59,8 @@ builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>()
 builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
 builder.Services.AddInMemoryRateLimiting();
 
+builder.Services.AddAutoMapper(typeof(OrderProfile));
+
 builder.Services.AddRateLimiter(options =>
 {
     // Rate limit cho Register — theo Email từ request body

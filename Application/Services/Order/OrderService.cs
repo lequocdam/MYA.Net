@@ -7,7 +7,8 @@ public class OrderService(
     IZoneService zoneService,
     IWeightService _weightService,
     IEventBus eventBus,
-    ILogger<OrderService> logger) : IOrderService
+    ILogger<OrderService> logger,
+    IMapper mapper) : IOrderService
 {
     public async Task<OrderPage<OrderDto>> GetAllAsync(
         OrderFilterDto filter,
@@ -111,142 +112,121 @@ public class OrderService(
             ?? throw new NotFoundException("Order", orderId);
     }
 
-    public async Task<OrderDto> CreateAsync(CreateOrderDto dto, Guid userId, CancellationToken ct)
+    public async Task<OrderDto> CreateAsync(
+        CreateOrderDto dto, 
+        Guid userId, 
+        CancellationToken ct)
     {
-        var transaction = await orderRepository.BeginTransactionAsync();
+        await using var transaction = await orderRepository.BeginTransactionAsync();
 
         try
         {
-            var sender = addressService.CreateAsync(new Address
-            {
-                Id      = Guid.NewGuid(),
-                Name    = dto.Sender.Name,
-                Phone   = dto.Sender.Phone,
-                Email   = dto.Sender.Email,
-                Address = dto.Sender.Address,
-            });
-
-            var receiver = addressService.CreateAsync(new Address
-            {
-                Id = Guid.NewGuid(),
-                Name    = dto.Receiver.Name,
-                Phone   = dto.Receiver.Phone,
-                Email   = dto.Receiver.Email,
-                Address = dto.Receiver.Address,
-            });
-
-            var items = dto.Items
-                .Select(i => new Items
-                {
-                    Id = Guid.NewGuid(),
-                    Image    = i.Image,
-                    Name     = i.Name,
-                    Type     = i.Type,
-                    Quantity = i.Quantity,
-                    Weight   = i.Weight,
-                    Length   = i.Length,
-                    Width    = i.Width,
-                    Height   = i.Height,
-                })
-                .ToList()
-
-            var zone   = zoneService.GetAsync(sender, receiver);
-            var weight = weightService.CalculateAsync(items);
-            var price  = priceService.CalculateAsync(zone, weight);
+            var zone   = await zoneService.GetAsync(dto.FromAddressId, dto.ToAddressId);
+            var weight = await weightService.CalculateAsync(dto.Items);
+            var price  = await priceService.CalculateAsync(zone, weight);
 
             var order = new Order
             {
-                Id         = Guid.NewGuid(),
-                Code       = GenerateCode(),
-                SenderId   = sender.Id,
-                ReceiverId = receiver.Id,
-                ServiceId  = dto.ServiceId,
-                Cost       = price.Cost,
-                Fee        = price.Fee,
-                Total      = price.Total,
-                Status     = OrderStatus.PENDING,
-                Date       = DateTime.UtcNow,
-                UserId     = userId,
-                Items      = items,
+                Id            = Guid.NewGuid(),
+                Code          = GenerateCode(),
+                Cost          = price.Cost,
+                Fee           = price.Fee,
+                Total         = price.Total,
+                Status        = OrderStatus.WAITTING,
+                Date          = DateTime.UtcNow,
+                FromAddressId = dto.FromAddressId,
+                ToAddressId   = dto.ToAddressId,
+                ServiceId     = dto.ServiceId,
+                WarehouseId   = dto.WarehouseId,
+                Items         = mapper.Map<List<Item>>(dto.Items),
+                UserId        = userId,
             };
 
-            orderRepository.Add(order);
+            await orderRepository.Add(order, ct);
 
-            orderHistoryService.CreateAsync(new OrderHistory
+            await orderHistoryService.CreateAsync(new OrderHistory
             {
-                Id = Guid.NewGuid(),
+                Id      = Guid.NewGuid(),
                 Note    = "Đã tạo đơn hàng",
                 Date    = DateTime.UtcNow,
                 OrderId = order.Id,
                 UserId  = userId,
             });
 
-            trackingService.CreateAsync(new Tracking
+            await trackingService.CreateAsync(new Tracking
             {
-                Id = Guid.NewGuid(),
+                Id      = Guid.NewGuid(),
                 Message = "Đã tạo đơn hàng",
                 Date    = DateTime.UtcNow,
                 OrderId = order.Id,
                 UserId  = userId,
             });
 
-            await orderRepository.SaveChangesAsync();
-            await transaction.CommitAsync();
+            await orderRepository.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
 
-            return new OrderDto
-            {
-                Id         = order.Id,
-                Code       = order.Code,
-                SenderId   = order.SenderId,
-                ReceiverId = order.ReceiverId,
-                Service    = order.Service,
-                Cost       = order.Cost,
-                Fee        = order.Fee,
-                Total      = order.Total,
-                Status     = order.Status,
-                Date       = DateTime.UtcNow,
-                UserId     = order.UserId,
-                Items      = order.Items,
-            };
+            return mapper.Map<OrderDto>(order);
         }
         catch (Exception e)
         {
-            await transaction.RollbackAsync();
-            logger.LogError("Create order failed. UserId={UserId}", userId);
+            await transaction.RollbackAsync(ct);
+            logger.LogError(
+                e,
+                "Create order failed. UserId={UserId}",
+                userId);
+            throw;
         }
     }
 
-    // CREATE LIST
-    public async Task<BatchResultDTO> CreateFromExcel(IFormFile file, Guid userId)
+    public async Task<OrderListDto> CreateListAsync(
+        IFormFile file,
+        Guid userId,
+        CancellationToken ct)
     {
         using var stream = file.OpenReadStream();
         using var workbook = new XLWorkbook(stream);
 
         var sheet = workbook.Worksheet("Orders")
-            ?? throw new BadRequestException("Sheet 'Orders' không tồn tại trong file Excel");
+            ?? throw new BadRequestException("Orders sheet not found");
 
-        // Parse rows → group by order (vì mỗi row là 1 item, nhiều row cùng SenderPhone+ReceiverPhone = 1 đơn)
-        var rawRows = sheet.RowsUsed().Skip(1).Select(row => new
+        var rows = sheet
+        .RowsUsed()
+        .Skip(1)
+        .Select(row => new CreateOrdersDto
         {
-            SenderName     = row.Cell(1).GetString().Trim(),
-            SenderPhone    = row.Cell(2).GetString().Trim(),
-            SenderAddress  = row.Cell(3).GetString().Trim(),
-            ReceiverName   = row.Cell(4).GetString().Trim(),
-            ReceiverPhone  = row.Cell(5).GetString().Trim(),
-            ReceiverAddress= row.Cell(6).GetString().Trim(),
-            Category       = row.Cell(7).GetString().Trim(),
-            ItemName       = row.Cell(8).GetString().Trim(),
-            ItemWeight     = row.Cell(9).GetValue<decimal>(),
-            ItemQty        = row.Cell(10).GetValue<int>(),
-            ItemLength     = row.Cell(11).GetValue<decimal>(),
-            ItemWidth      = row.Cell(12).GetValue<decimal>(),
-            ItemHeight     = row.Cell(13).GetValue<decimal>(),
-            RowNumber      = row.RowNumber(),
-        }).ToList();
+            FromAddressName    = row.Cell(1).GetString().Trim(),
+            FromAddressPhone   = row.Cell(2).GetString().Trim(),
+            FromAddressEmail   = row.Cell(3).GetString().Trim(),
+            FromAddressAddress = row.Cell(4).GetString().Trim(),
 
-        // Group thành từng đơn: key = SenderPhone + ReceiverPhone + Category
-        var groups = rawRows
-            .GroupBy(r => (r.SenderPhone, r.ReceiverPhone, r.Category))
+            ToAddressName      = row.Cell(5).GetString().Trim(),
+            ToAddressPhone     = row.Cell(6).GetString().Trim(),
+            ToAddressEmail     = row.Cell(7).GetString().Trim(),
+            ToAddressAddress   = row.Cell(8).GetString().Trim(),
+
+            ServiceName        = row.Cell(9).GetString().Trim(),
+            WarehouseName      = row.Cell(10).GetString().Trim(),
+
+            ItemImage          = row.Cell(11).GetString().Trim(),
+            ItemName           = row.Cell(12).GetString().Trim(),
+            ItemWeight         = row.Cell(13).GetValue<double>(),
+            ItemQuantity       = row.Cell(14).GetValue<int>(),
+            ItemLength         = row.Cell(15).GetValue<double>(),
+            ItemWidth          = row.Cell(16).GetValue<double>(),
+            ItemHeight         = row.Cell(17).GetValue<double>(),
+
+            RowNumber          = row.RowNumber()
+        })
+        .ToList();
+
+        var groups = rows
+            .GroupBy(r => new
+            {
+                r.FromAddressPhone,
+                r.ToAddressPhone,
+                r.ServiceName,
+                r.WarehouseName
+            })
             .ToList();
 
         var results  = new List<OrderDTO>();
@@ -257,33 +237,47 @@ public class OrderService(
             var first = group.First();
             try
             {
-                var dto = new CreatedOrderDTO
+                var fromAddress = await addressService.GetByNameAsync(
+                    first.FromAddressName,
+                    first.FromAddressPhone,
+                    first.FromAddressEmail,
+                    first.FromAddressAddress,
+                    ct);
+
+                var toAddress = await addressService.GetByNameAsync(
+                    first.ToAddressName,
+                    first.ToAddressPhone,
+                    first.ToAddressEmail,
+                    first.ToAddressAddress,
+                    ct);
+
+                var service = await serviceService.GetByNameAsync(
+                    first.ServiceName,
+                    ct);
+
+                var warehouse = await warehouseService.GetByNameAsync(
+                    first.WarehouseName,
+                    ct);
+
+                var dto = new CreateOrderDto
                 {
-                    Sender = new AddressInputDTO
+                    FromAddressId = fromAddress.Id,
+                    ToAddressId   = toAddress.Id,
+                    ServiceId     = service.Id,
+                    WarehouseId   = warehouse.Id,
+                    Items = group.Select(i => new CreateItemDto
                     {
-                        Name    = first.SenderName,
-                        Phone   = first.SenderPhone,
-                        Address = first.SenderAddress,
-                    },
-                    Receiver = new AddressInputDTO
-                    {
-                        Name    = first.ReceiverName,
-                        Phone   = first.ReceiverPhone,
-                        Address = first.ReceiverAddress,
-                    },
-                    Category = first.Category,
-                    Items    = group.Select(r => new ItemInputDTO
-                    {
-                        Name   = r.ItemName,
-                        Weight = r.ItemWeight,
-                        Quantity = r.ItemQty,
-                        Length = r.ItemLength,
-                        Width  = r.ItemWidth,
-                        Height = r.ItemHeight,
-                    }).ToList(),
+                        Image    = i.ItemImage,
+                        Name     = i.ItemName,
+                        Quantity = i.ItemQuantity,
+                        Weight   = i.ItemWeight,
+                        Length   = i.ItemLength,
+                        Width    = i.ItemWidth,
+                        Height   = i.ItemHeight
+                    }).ToList()
                 };
 
-                var order = await Create(dto, userId);
+                var order = await CreateAsync(dto, userId, ct);
                 results.Add(order);
             }
             catch (Exception ex)
@@ -298,14 +292,13 @@ public class OrderService(
             }
         }
 
-        return new BatchResultDTO
+        return new OrderListDTO
         {
             Created = results,
             Errors  = errors,
         };
     }
 
-    // UPDATE
     public async Task Update(Guid orderId, UpdatingOrderDTO dto, Guid userId)
     {
         using var transaction = await _context.Database.BeginTransactionAsync();
@@ -423,7 +416,6 @@ public class OrderService(
         };
     }
 
-    // UPDATE STATUS
     public async Task UpdateStatus(Guid orderId, string trigger, Guid userId)
     {
         using var transaction = await _context.Database.BeginTransactionAsync();
@@ -474,6 +466,89 @@ public class OrderService(
             await transaction.RollbackAsync();
             _logger.LogError(ex, "Update status failed. OrderId={OrderId} Trigger={Trigger}",
                 orderId, trigger);
+            throw;
+        }
+    }
+
+    public async Task BulkUpdateStatusAsync(
+        BulkUpdateStatusDto dto,
+        Guid userId,
+        CancellationToken ct)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+
+        try
+        {
+            // 1. Load all orders 1 lần
+            var orders = await _context.Orders
+                .Where(o => dto.OrderIds.Contains(o.Id))
+                .ToListAsync(ct);
+
+            if (orders.Count == 0)
+                throw new NotFoundException("Orders not found");
+
+            var now = DateTime.UtcNow;
+
+            var histories = new List<OrderHistory>();
+            var trackings = new List<Tracking>();
+
+            foreach (var order in orders)
+            {
+                var workflow = new OrderWorkflow(order.Status);
+
+                if (!workflow.Can(dto.Trigger))
+                    continue; // hoặc throw tùy business
+
+                var newStatus = workflow.Fire(dto.Trigger);
+
+                // update entity
+                order.Status = newStatus;
+
+                // history
+                histories.Add(new OrderHistory
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = order.Id,
+                    UserId = userId,
+                    Status = newStatus,
+                    Note = dto.Trigger,
+                    Date = now
+                });
+
+                // tracking
+                trackings.Add(new Tracking
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = order.Id,
+                    Status = newStatus,
+                    Message = GetTrackingMessage(newStatus),
+                    Date = now
+                });
+            }
+
+            // 2. Add batch
+            _context.OrderHistories.AddRange(histories);
+            _context.Tracking.AddRange(trackings);
+
+            // 3. Save 1 lần
+            await _context.SaveChangesAsync(ct);
+
+            await transaction.CommitAsync(ct);
+
+            // 4. Event (có thể batch)
+            foreach (var order in orders)
+            {
+                await _eventBus.Publish(new OrderStatusChangedEvent
+                {
+                    OrderId = order.Id,
+                    Status = order.Status
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync(ct);
+            _logger.LogError(ex, "Bulk update status failed");
             throw;
         }
     }
