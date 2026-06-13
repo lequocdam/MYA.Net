@@ -1,24 +1,15 @@
 using Domain.Enums;
-using Domain.Interfaces;
-using Domain.ValueObjects;
 
-public class PriceService : IPriceService
+public class PriceService(
+    IPriceEngine priceEngine) : IPriceService
 {
-    private readonly IPriceEngine _priceEngine;
-
-    public PriceService(IPriceEngine priceEngine)
-    {
-        _priceEngine = priceEngine;
-    }
 
     public async Task<Price> Calculate(
-        double weight,
-        Zone zone,
-        double cod = 0)
+        decimal weight,
+        Zone zone)
     {
-        return await _priceEngine.Calculate(
+        return await priceEngine.Calculate(
             weight,
-            zone,
-            cod);
+            zone);
     }
 }

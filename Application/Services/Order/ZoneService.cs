@@ -1,28 +1,24 @@
 public class ZoneService(
     IZoneRepository zoneRepository,
+    IAddressService addressService,
     ILogger<ZoneService> logger) : IZoneService
 {
     // Cache tránh query DB mỗi lần tính zone
     private List<Province>     _provinces;
     private List<ZoneOverride> _overrides;
 
-    private async Task LoadAsync()
+    public async Task<ZoneResult> GetAsync(Guid FromAddressId, Guid ToAddressId)
     {
-        if (_provinces is not null) return;
+        await LoadAsync();
 
-        _provinces = await db.Provinces.ToListAsync();
-        _overrides = await db.ZoneOverrides.ToListAsync();
-    }
+        var fromAddress = await addressService.GetByIdAsync(FromAddressId);
+        var toAddress   = await addressService.GetByIdAsync(ToAddressId);
 
-    public async Task<ZoneResult> GetAsync(AddressDto sender, AddressDto receiver)
-    {
-        await EnsureLoadedAsync();
+        var fromProvince = provinces.FirstOrDefault(p => p.Code == fromAddress.ProvinceCode)
+            ?? throw new NotFoundException("From province not found", fromAddress.ProvinceCode);
 
-        var from = _provinces.FirstOrDefault(p => p.Code == sender.ProvinceCode)
-            ?? throw new NotFoundException("Province", sender.ProvinceCode);
-
-        var to = _provinces.FirstOrDefault(p => p.Code == receiver.ProvinceCode)
-            ?? throw new NotFoundException("Province", receiver.ProvinceCode);
+        var toProvince   = provinces.FirstOrDefault(p => p.Code == toAddress.ProvinceCode)
+            ?? throw new NotFoundException("To province not found", toAddress.ProvinceCode);
 
         // Check restricted trước
         if (from.IsRestricted)
@@ -44,5 +40,13 @@ public class ZoneService(
                  : Zone.CrossRegion;
 
         return ZoneResult.Ok(zone, from, to);
+    }
+
+    private async Task LoadAsync()
+    {
+        if (provinces is not null) return;
+
+        provinces = await db.Provinces.ToListAsync();
+        overrides = await db.ZoneOverrides.ToListAsync();
     }
 }

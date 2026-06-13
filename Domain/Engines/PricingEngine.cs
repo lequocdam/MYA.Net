@@ -21,12 +21,8 @@ public class PriceEngine : IPriceEngine
 
     public async Task<Price> Calculate(
         double weight,
-        Zone zone,
-        double cod = 0)
+        Zone zone)
     {
-        if (weight <= 0)
-            throw new ArgumentException("Weight invalid");
-
         var rule = await _ruleProvider.Get(zone, weight);
 
         if (rule == null)
@@ -40,6 +36,35 @@ public class PriceEngine : IPriceEngine
         {
             Cost = cost,
             Fee = fee
+        };
+
+         var rate = await _shippingRateRepository.GetByZoneAsync(zone);
+
+        if (rate is null)
+            throw new NotFoundException("Shipping rate not found");
+
+        decimal cost;
+
+        if (weight <= rate.BaseWeight)
+        {
+            cost = rate.BaseCost;
+        }
+        else
+        {
+            var extraWeight = weight - rate.BaseWeight;
+
+            var extraStep = Math.Ceiling(
+                extraWeight / rate.StepWeight);
+
+            cost = rate.BaseCost
+                 + (decimal)extraStep * rate.AdditionalCost;
+        }
+
+        return new Price
+        {
+            Cost = cost,
+            Fee = 0,
+            Total = cost
         };
     }
 }

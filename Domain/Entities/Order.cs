@@ -6,11 +6,11 @@ namespace MYAlog.Models
 
         public string Code { get; set; }
 
-        public string SenderId { get; set; }
+        public string FromAddressId { get; set; }
 
-        public string ReceiverId { get; set; }
+        public string ToAddressId { get; set; }
 
-        public string Service { get; set; }
+        public string ServiceId { get; set; }
 
         public string Warehouse { get; set; }
 
@@ -21,5 +21,15 @@ namespace MYAlog.Models
         public double Fee { get; set; }
 
         public double Total { get; set; }
+
+        public void Update(
+            Guid fromAddressId,
+            Guid toAddressId,
+            Guid serviceId)
+        {
+            FromAddressId = fromAddressId;
+            ToAddressId = toAddressId;
+            ServiceId = serviceId;
+        }
     }
 }

@@ -3,9 +3,11 @@ using Microsoft.Extensions.Logging;
 
 public class OrderService(
     IOrderRepository orderRepository,
-    IAddressService addressService,
+    IOrderPermissionSpecification orderPermissionSpecification,
+    IOrderFilterSpecification orderFilterSpecification,
+    // SERVICES
     IZoneService zoneService,
-    IWeightService _weightService,
+    IWeightService weightService,
     IEventBus eventBus,
     ILogger<OrderService> logger,
     IMapper mapper) : IOrderService
@@ -13,42 +15,37 @@ public class OrderService(
     public async Task<OrderPage<OrderDto>> GetAllAsync(
         OrderFilterDto filter,
         Guid userId,
+        string role,
+        Guid? warehouseId,
         CancellationToken ct)
     {
-        var query = orderRepository
-            .Query()
-            .Where(o => o.UserId == userId);
+        var query = orderRepository.Query();
 
-        if (!string.IsNullOrWhiteSpace(filter.Code))
-            query = query.Where(o => o.Code.Contains(filter.Code));
+        query = permissionSpec.Apply(
+            query,
+            userId,
+            role,
+            warehouseId);
 
-        if (filter.From.HasValue)
-            query = query.Where(o => o.Date >= filter.From.Value);
-
-        if (filter.To.HasValue)
-            query = query.Where(o => o.Date <= filter.To.Value);
-
-        if (filter.Status.HasValue)
-            query = query.Where(o => o.Status == filter.Status.Value);
+        query = filterSpec.Apply(
+            query,
+            filter);
 
         var total = await query.CountAsync(ct);
 
         var skip = (filter.Page - 1) * filter.PageSize;
 
         var orders = await query
-            .OrderByDescending(o => o.Date)
+            .OrderByDescending(x => x.Date)
             .Skip(skip)
             .Take(filter.PageSize)
-            .Select(o => new OrderDto
+            .Select(x => new OrderDto
             {
-                Id = o.Id,
-                Code = o.Code,
-                Date = o.Date,
-                FromId = o.FromId,
-                ToId = o.ToId,
-                ServiceId = o.ServiceId,
-                Total = o.Total,
-                Status = o.Status
+                Id = x.Id,
+                Code = x.Code,
+                Date = x.Date,
+                Total = x.Total,
+                Status = x.Status
             })
             .ToListAsync(ct);
 
@@ -117,29 +114,29 @@ public class OrderService(
         Guid userId, 
         CancellationToken ct)
     {
-        await using var transaction = await orderRepository.BeginTransactionAsync();
+        using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         try
         {
             var zone   = await zoneService.GetAsync(dto.FromAddressId, dto.ToAddressId);
-            var weight = await weightService.CalculateAsync(dto.Items);
+            var weight = await weightService.Calculate(dto.Items);
             var price  = await priceService.CalculateAsync(zone, weight);
 
             var order = new Order
             {
                 Id            = Guid.NewGuid(),
                 Code          = GenerateCode(),
+                Date          = DateTime.UtcNow,
                 Cost          = price.Cost,
                 Fee           = price.Fee,
                 Total         = price.Total,
                 Status        = OrderStatus.WAITTING,
-                Date          = DateTime.UtcNow,
                 FromAddressId = dto.FromAddressId,
                 ToAddressId   = dto.ToAddressId,
                 ServiceId     = dto.ServiceId,
                 WarehouseId   = dto.WarehouseId,
-                Items         = mapper.Map<List<Item>>(dto.Items),
                 UserId        = userId,
+                Items         = mapper.Map<List<Item>>(dto.Items),
             };
 
             await orderRepository.Add(order, ct);
@@ -299,83 +296,99 @@ public class OrderService(
         };
     }
 
-    public async Task Update(Guid orderId, UpdatingOrderDTO dto, Guid userId)
+    public async Task UpdateAsync( 
+        UpdateOrderDto dto, 
+        Guid orderId,
+        Guid userId, 
+        CancellationToken ct)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
+        using var transaction = await db.Database.BeginTransactionAsync();
 
         try
         {
-            var order = await _context.Orders.FindAsync(orderId)
-                ?? throw new NotFoundException("Order", orderId);
+            var order = await db.Orders.FindAsync(orderId, ct)
+                ?? throw new NotFoundException("Order not found", orderId);
 
             if (order.UserId != userId)
-                throw new ForbiddenException("Bạn không có quyền sửa đơn hàng này");
+                throw new ForbiddenException("", userId);
 
             var updatedStatuses = new[]
             {
-                OrderStatus.PENDING,
-                OrderStatus.CÒNIRMED
+                OrderStatus.WAITTING
             };
 
             if (!updatedStatuses.Contains(order.Status))
-                throw new InvalidOrderTransitionException(
-                    order.Status,
-                    "Không thể cập nhật đơn khi đang trong quá trình vận chuyển"
-                );
+                throw new InvalidOrderTransitionException("", order.Status);
 
-            order = new Order
+            order.Update(
+                dto.FromAddressId,
+                dto.ToAddressId,
+                dto.ServiceId
+            );
+
+            var removedItems = order.Items
+                .Where(oI => dto.Items.All(dI => dI.Id != oI.Id))
+                .ToList();
+
+            foreach (var item in removedItems)
             {
-                SenderId   = sender.Id,
-                ReceiverId = receiver.Id,
-                Category   = dto.Category,
-                Cost       = price.Cost,
-                Fee        = price.Fee,
-                Total      = price.Total,
-                Date       = now,
-                Items      = dto.Items.Select(i => new Item
+                order.Items.Remove(item);
+            }
+
+            foreach (var item in dto.Items)
+            {
+                var exitedItem = order.Items.FirstOrDefault(i => i.Id == item.Id);
+                
+                if (exitedItem is null)
                 {
-                    Image    = i.Image,
-                    Name     = i.Name,
-                    Type     = i.Type,
-                    Quantity = i.Quantity,
-                    Weight   = i.Weight,
-                    Length   = i.Length,
-                    Width    = i.Width,
-                    Height   = i.Height,
-                }).ToList()
-            };
+                    order.Items.Add(new Item
+                    {
+                        Id       = Guid.NewGuid(),
+                        Name     = item.Name,
+                        Quantity = item.Quantity,
+                        Weight   = item.Weight,
+                    });
+                }
+                else
+                {
+                    exitedItem.Name     = item.Name;
+                    exitedItem.Quantity = item.Quantity;
+                    exitedItem.Weight   = item.Weight;
+                }
+            }
 
-            _context.OrderHistories.Add(new OrderHistory
+            var zone   = zoneService.GetZone(order.Sender, order.Receiver);
+            var weight = weightService.Calculate(order.Items);
+            var price  = priceService.Calculate(zone, weight);
+
+            order.Cost = price.Cost;
+            order.Fee = price.Fee;
+            order.Total = price.Total;
+
+            await orderHistoryService.CreateAsync(new OrderHistory
             {
+                Id      = Guid.NewGuid(),
+                Note    = "Đã cập nhật đơn hàng",
+                Date    = DateTime.UtcNow,
                 OrderId = orderId,
                 UserId  = userId,
-                Status  = OrderStatus.Cancelled,
-                Note    = $"Hủy bởi khách. Lý do: {reason}",
-                Date    = now
             });
 
-            _context.Tracking.Add(new Tracking
+            await trackingService.CreateAsync(new Tracking
             {
+                Id      = Guid.NewGuid(),
+                Message = "Đã cập nhật đơn hàng",
+                Date    = DateTime.UtcNow,
                 OrderId = orderId,
-                Status  = OrderStatus.Cancelled,
-                Message = "Đơn hàng đã bị hủy",
-                Date    = now
+                UserId  = userId,
             });
 
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
-
-            await _eventBus.Publish(new OrderStatusChangedEvent
-            {
-                OrderId = orderId,
-                Status  = OrderStatus.Cancelled
-            });
+            await orderRepository.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
         }
-        catch (Exception ex) when (ex is not NotFoundException
-                                && ex is not ForbiddenException
-                                && ex is not InvalidOrderTransitionException)
+        catch (Exception e) 
         {
-            await transaction.RollbackAsync();
+            await transaction.RollbackAsync(ct);
             _logger.LogError(ex, "Cancel order failed. OrderId={OrderId} UserId={UserId}",
                 orderId, userId);
             throw;
@@ -416,7 +429,7 @@ public class OrderService(
         };
     }
 
-    public async Task UpdateStatus(Guid orderId, string trigger, Guid userId)
+    /*public async Task UpdateStatus(Guid orderId, string trigger, Guid userId)
     {
         using var transaction = await _context.Database.BeginTransactionAsync();
 
@@ -468,9 +481,9 @@ public class OrderService(
                 orderId, trigger);
             throw;
         }
-    }
+    */}
 
-    public async Task BulkUpdateStatusAsync(
+    public async Task BulkConfirmAsync(
         BulkUpdateStatusDto dto,
         Guid userId,
         CancellationToken ct)
@@ -479,8 +492,7 @@ public class OrderService(
 
         try
         {
-            // 1. Load all orders 1 lần
-            var orders = await _context.Orders
+            var orders = await db.Orders
                 .Where(o => dto.OrderIds.Contains(o.Id))
                 .ToListAsync(ct);
 
@@ -497,14 +509,12 @@ public class OrderService(
                 var workflow = new OrderWorkflow(order.Status);
 
                 if (!workflow.Can(dto.Trigger))
-                    continue; // hoặc throw tùy business
+                    continue;
 
                 var newStatus = workflow.Fire(dto.Trigger);
 
-                // update entity
                 order.Status = newStatus;
 
-                // history
                 histories.Add(new OrderHistory
                 {
                     Id = Guid.NewGuid(),
@@ -515,7 +525,6 @@ public class OrderService(
                     Date = now
                 });
 
-                // tracking
                 trackings.Add(new Tracking
                 {
                     Id = Guid.NewGuid(),
@@ -526,16 +535,12 @@ public class OrderService(
                 });
             }
 
-            // 2. Add batch
             _context.OrderHistories.AddRange(histories);
             _context.Tracking.AddRange(trackings);
 
-            // 3. Save 1 lần
-            await _context.SaveChangesAsync(ct);
-
+            await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
 
-            // 4. Event (có thể batch)
             foreach (var order in orders)
             {
                 await _eventBus.Publish(new OrderStatusChangedEvent
