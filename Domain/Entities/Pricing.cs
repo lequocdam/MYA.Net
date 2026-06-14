@@ -1,11 +1,16 @@
 public class Pricing
 {
-    public int Id { get; set; }
-    public Zone Zone { get; set; }
-    public decimal BasePrice { get; set; }
-    public decimal StepWeight { get; set; }
-    public decimal StepFee { get; set; }
-    public decimal RemoteFee { get; set; }
-    public decimal CodRate { get; set; }
-    public DateTime EffectiveDate { get; set; }
+    public Guid Id { get; set; }
+
+    public decimal BaseWeight { get; set; }
+
+    public decimal BaseCost { get; set; }
+
+    public decimal NextWeight { get; set; }
+
+    public decimal AddedCost { get; set; }
+
+    public Guid ServiceId { get; set; }
+
+    public Guid ZoneId { get; set; }
 }

@@ -1,130 +1,118 @@
-public class AddressService
+public class AddressService(
+    IAddressRepository addressRepository,
+    IMapper mapper,
+    ILogger<AddressService> logger) : IAddressService
 {
-    private readonly AppDbContext _context;
-
-    public AddressService(AppDbContext context)
+    public async Task<List<AddressDto>> GetAllAsync(
+        Guid userId,
+        CancellationToken ct)
     {
-        _context = context;
-    }
-
-    public async Task<List<AddressDTO>> GetAll(int userId)
-    {
-        return await _context.Addresses
+        return await addressRepository.Query()
+            .AsNoTracking()
             .Where(a => a.UserId == userId)
-            .Select(a => new AddressDTO
-            {
-                Name = a.Name,
-                Phone = a.Phone,
-                Email = a.Email,
-                Address = a.Address,
-                IsDefault = a.IsDefault
-            })
-            .ToListAsync();
+            .OrderByDescending(a => a.IsDefault)
+            .Select(a => new AddressDto(
+                a.Id,
+                a.Name,
+                a.Phone,
+                a.City,
+                a.Ward,
+                a.Street,
+                a.IsDefault))
+            .ToListAsync(ct);
     }
 
-    public async Task<AddressDto> GetByInfoAsync(
-        string name,
-        string phone,
-        string email,
-        string address)
-    {
-        return await _context.Addresses
-            .Where(x =>
-                !x.IsDeleted &&
-                x.Name == name &&
-                x.Phone == phone &&
-                x.Email == email &&
-                x.Address == address)
-            .Select(x => new AddressDTO
-            {
-                Id = x.Id,
-                Name = x.Name,
-                Phone = x.Phone,
-                Email = x.Email,
-                Address = x.Address,
-                IsDefault = x.IsDefault
-            })
-            .FirstOrDefaultAsync();
-    }
-
-    public async Task<AddressDTO> Create(CreatedAddressDTO dto, int userId)
+    public async Task<AddressDto> CreateAsync(
+        CreateAddressDto dto,
+        Guid userId,
+        CancellationToken ct)
     {
         if (dto.IsDefault)
-        {
-            var oldDefaults = _context.Addresses
-                .Where(x => x.IsDefault && x.UserId == userId);
-
-            await oldDefaults.ForEachAsync(x => x.IsDefault = false);
-        }
+            await ClearDefaultAsync(userId, ct);
 
         var address = new Address
         {
-            Name = dto.Name,
-            Phone = dto.Phone,
-            Email = dto.Email,
-            Address = dto.Address,
+            Id        = Guid.NewGuid(),
+            Name      = dto.Name,
+            Phone     = dto.Phone,
+            City      = dto.City,
+            Ward      = dto.Ward,
+            Street    = dto.Street,
+            Latitude  = dto.Latitude,
+            Longitude = dto.Longitude,
             IsDefault = dto.IsDefault,
-            UserId = userId
+            UserId    = userId
         };
 
-        _context.Add(address);
-        await _context.SaveChangesAsync();
+        await addressRepository.AddAsync(address, ct);
+        await addressRepository.SaveChangesAsync(ct);
 
-        return new AddressDTO
-        {
-            Id = address.Id,
-            Name = address.Name,
-            Phone = address.Phone,
-            Email = address.Email,
-            Address = address.Address,
-            IsDefault = address.IsDefault
-        };
+        return mapper.Map<AddressDto>(address);
     }
 
-    public async Task<AddressDTO> Update(AddressUpdateDto dto, int id, int userId)
+    public async Task UpdateAsync(
+        Guid id,
+        UpdateAddressDto dto,
+        Guid userId,
+        CancellationToken ct)
     {
-        var address = await _context.Addresses
-            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId);
+        var address = await addressRepository.Query()
+            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId, ct)
+            ?? throw new NotFoundException("Address not found");
 
-        if (address == null) return null;
+        if (dto.IsDefault && !address.IsDefault)
+            await ClearDefaultAsync(userId, ct);
 
-        if (dto.IsDefault)
-        {
-            var oldDefaults = _context.Addresses
-                .Where(x => x.UserId == userId && x.IsDefault);
-
-            await oldDefaults.ForEachAsync(x => x.IsDefault = false);
-        }
-
-        address.Name = dto.Name;
-        address.Phone = dto.Phone;
-        address.Email = dto.Email;
-        address.Address = dto.Address;
+        address.Name      = dto.Name;
+        address.Phone     = dto.Phone;
+        address.City      = dto.City;
+        address.Ward      = dto.Ward;
+        address.Street    = dto.Street;
+        address.Latitude  = dto.Latitude;
+        address.Longitude = dto.Longitude;
         address.IsDefault = dto.IsDefault;
 
-        await _context.SaveChangesAsync();
-
-        return new AddressDTO
-        {
-            Id = address.Id,
-            Name = address.Name,
-            Phone = address.Phone,
-            Email = address.Email,
-            Address = address.Address,
-            IsDefault = address.IsDefault
-        };
+        await addressRepository.SaveChangesAsync(ct);
     }
 
-    public async Task<bool> Delete(int id, int userId)
+    public async Task DeleteAsync(
+        Guid id,
+        Guid userId,
+        CancellationToken ct)
     {
-        var address = await _context.Addresses
-            .FirstOrDefaultAsync(x => x.Id == id && x.UserId == userId);
+        var address = await addressRepository.Query()
+            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId, ct)
+            ?? throw new NotFoundException("Address not found");
 
-        if (address == null) return false;
+        if (address.IsDefault)
+            throw new BusinessException("Default address cannot be deleted");
 
-        address.IsDeleted = true;
+        address.IsActive = false;
 
-        await _context.SaveChangesAsync();
-        return true;
+        await addressRepository.SaveChangesAsync(ct);
+    }
+
+    public async Task SetDefaultAsync(
+        Guid id,
+        Guid userId,
+        CancellationToken ct)
+    {
+        var address = await addressRepository.Query()
+            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId, ct)
+            ?? throw new NotFoundException("Address", id);
+
+        if (address.IsDefault) return;
+
+        await ClearDefaultAsync(userId, ct);
+
+        address.IsDefault = true;
+        await addressRepository.SaveChangesAsync(ct);
+    }
+
+    private async Task ClearDefaultAsync(Guid userId, CancellationToken ct)
+    {
+        await addressRepository.Query()
+            .Where(a => a.UserId == userId && a.IsDefault)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsDefault, false), ct);
     }
 }

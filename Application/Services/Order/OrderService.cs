@@ -110,67 +110,81 @@ public class OrderService(
     }
 
     public async Task<OrderDto> CreateAsync(
-        CreateOrderDto dto, 
-        Guid userId, 
+        CreateOrderDto dto,
+        Guid userId,
         CancellationToken ct)
     {
-        using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var fromAddress = await addressService.GetById(dto.FromAddressId);
+        var toAddress   = await addressService.GetById(dto.ToAddressId);
 
+        var fromAddressSnapshot = new AddressSnapshot
+        {
+            Name      = fromAddress.Name,
+            Phone     = fromAddress.Phone,
+            City      = fromAddress.City,
+            Ward      = fromAddress.Ward,
+            Street    = fromAddress.Street,
+            Latitude  = fromAddress.Latitude,
+            Longitude = fromAddress.Longitude
+        };
+
+        var toAddressSnapshot = new AddressSnapshot
+        {
+            Name      = toAddress.Name,
+            Phone     = toAddress.Phone,
+            City      = fromAddress.City,
+            Ward      = toAddress.Ward,
+            Street    = toAddress.Street,
+            Latitude  = toAddress.Latitude,
+            Longitude = toAddress.Longitude
+        };
+
+        var warehouse = await warehouseService.GetNearestAsync(
+            fromAddress.City,
+            fromAddress.Ward,
+            fromAddress.Street,
+            fromAddress.Latitude,
+            fromAddress.Longitude,
+            ct);
+
+        var zone   = zoneService.GetZone(fromAddress.Province, toAddress.Province);
+        var weight = weightService.Calculate(dto.Items);
+        var price  = await pricingService.GetAsync(dto.ServiceId, zone, weight, ct);
+
+        using var transaction = await db.Database.BeginTransactionAsync(ct);
         try
         {
-            var zone   = await zoneService.GetAsync(dto.FromAddressId, dto.ToAddressId);
-            var weight = await weightService.Calculate(dto.Items);
-            var price  = await priceService.CalculateAsync(zone, weight);
-
             var order = new Order
             {
-                Id            = Guid.NewGuid(),
-                Code          = GenerateCode(),
-                Date          = DateTime.UtcNow,
-                Cost          = price.Cost,
-                Fee           = price.Fee,
-                Total         = price.Total,
-                Status        = OrderStatus.WAITTING,
-                FromAddressId = dto.FromAddressId,
-                ToAddressId   = dto.ToAddressId,
-                ServiceId     = dto.ServiceId,
-                WarehouseId   = dto.WarehouseId,
-                UserId        = userId,
-                Items         = mapper.Map<List<Item>>(dto.Items),
+                Id                  = Guid.NewGuid(),
+                Code                = GenerateCode(),
+                FromAddressSnapshot = fromAddressSnapshot,
+                ToAddressSnapshot   = toAddressSnapshot,
+                Cost                = price.Cost,
+                Fee                 = price.Fee,
+                Total               = price.Total,
+                Status              = OrderStatus.WAITTING,
+                Date                = DateTime.UtcNow,
+                ServiceId           = dto.ServiceId,
+                WarehouseId         = warehouse.Id,
+                UserId              = userId,
+                Items               = mapper.Map<List<Item>>(dto.Items),
             };
 
-            await orderRepository.Add(order, ct);
-
-            await orderHistoryService.CreateAsync(new OrderHistory
-            {
-                Id      = Guid.NewGuid(),
-                Note    = "Đã tạo đơn hàng",
-                Date    = DateTime.UtcNow,
-                OrderId = order.Id,
-                UserId  = userId,
-            });
-
-            await trackingService.CreateAsync(new Tracking
-            {
-                Id      = Guid.NewGuid(),
-                Message = "Đã tạo đơn hàng",
-                Date    = DateTime.UtcNow,
-                OrderId = order.Id,
-                UserId  = userId,
-            });
-
+            await orderRepository.AddAsync(order, ct);
+            await orderHistoryRepository.AddAsync(new OrderHistory { ... }, ct);
+            await trackingRepository.AddAsync(new Tracking { ... }, ct);
             await orderRepository.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
 
-            return mapper.Map<OrderDto>(order);
+            await eventBus.Publish(new OrderCreatedEvent { ... });
+
+            return new OrderDto(...);
         }
         catch (Exception e)
         {
             await transaction.RollbackAsync(ct);
-            logger.LogError(
-                e,
-                "Create order failed. UserId={UserId}",
-                userId);
+            logger.LogError(e, "Create order failed. UserId={UserId}", userId);
             throw;
         }
     }
@@ -395,7 +409,7 @@ public class OrderService(
         }
     }
 
-    public async Task<EstimateDTO> Estimate(EstimateDTO dto)
+    public async Task<EstimateD> Estimate(EstimateDTO dto)
     {
         var zone = _zoneService.GetZone(dto.sender, dto.receiver);
         var weight = _weightService.Calculate(dto.Items);
@@ -483,12 +497,12 @@ public class OrderService(
         }
     */}
 
-    public async Task BulkConfirmAsync(
-        BulkUpdateStatusDto dto,
+    public async Task ConfirmAsync(
+        ConfirmDto dto,
         Guid userId,
         CancellationToken ct)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         try
         {
@@ -508,8 +522,8 @@ public class OrderService(
             {
                 var workflow = new OrderWorkflow(order.Status);
 
-                if (!workflow.Can(dto.Trigger))
-                    continue;
+                if (!workflow.Can(dto.trigger))
+                throw new InvalidOrderTransitionException(order.Status, trigger);
 
                 var newStatus = workflow.Fire(dto.Trigger);
 

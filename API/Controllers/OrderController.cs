@@ -2,18 +2,25 @@
 [Route("api/orders")]
 [Authorize]
 public class OrderController(
-    IOrderService orderService;
+    IOrderService orderService
 ) : ControllerBase
 {
     private Guid userId =>
         Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     [HttpGet]
-    [Authorize(Roles = "User, Admin")]
-    public async Task<IActionResult> GetAll([FromQuery] OrderFilterDTO filter)
+    [Authorize(Roles = "Admin, Manager, User")]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] OrderFilterDto filter,
+        CancellationToken ct)
     {
-        var result = await _orderService.GetList(filter, CurrentUserId);
-        return Ok(result);
+        var result = await orderService.GetAllAsync(filter, userId, ct);
+
+        return Ok(new ApiResponse<Page<UserDto>>
+        {
+            Message = "",
+            Data    = result,
+        });
     }
 
     // GET /api/orders/{id}
@@ -25,31 +32,18 @@ public class OrderController(
     }
 
     [HttpPost]
-    [Authorize(Roles = "User, Admin")]
-    public async Task<IActionResult> Post(
-        [FromBody] CreateOrderDto dto,
-        [FromServices] IValidator<CreateOrderDto> validator,
+    [Authorize(Roles = "Admin, Manager, User")]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateOrderDto dto, 
         CancellationToken ct)
     {
         var result = await orderService.CreateAsync(dto, userId, ct);
 
-        return Ok(new ApiResponse<OrderDto>
+        return Ok(new ApiResponse<UserDto>
         {
-            Message = "Đã tạo đơn hàng",
+            Message = "Order created successfully",
             Data    = result,
         });
-    }
-
-    [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Put(
-        UpdateOrderDto dto,
-        Guid id,
-        CancellationToken ct)
-    {
-        await mediator.Send(new UpdateOrderCommand(dto, id, userId),
-            ct);
-
-        return NoContent();
     }
 
     // DELETE /api/orders/{id}
