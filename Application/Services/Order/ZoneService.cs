@@ -1,52 +1,30 @@
 public class ZoneService(
-    IZoneRepository zoneRepository,
-    IAddressService addressService,
-    ILogger<ZoneService> logger) : IZoneService
+    ICityRepository cityRepository,
+    ICityOverrideRepository cityOverrideRepository) : IZoneService
 {
-    // Cache tránh query DB mỗi lần tính zone
-    private List<Province>     _provinces;
-    private List<ZoneOverride> _overrides;
 
-    public async Task<ZoneResult> GetAsync(Guid FromAddressId, Guid ToAddressId)
+    public async Task<ZoneResult> GetByIdAsync(Guid FromCityCode, Guid ToCityCode )
     {
-        await LoadAsync();
+        var fromCity = cityRepository.FirstOrDefault(c => c.Code == fromAddress.Code)
+            ?? throw new NotFoundException("From city not found");
 
-        var fromAddress = await addressService.GetByIdAsync(FromAddressId);
-        var toAddress   = await addressService.GetByIdAsync(ToAddressId);
+        var toCity   = cityRepository.FirstOrDefault(c => c.Code == toAddress.Code)
+            ?? throw new NotFoundException("To city not found");
 
-        var fromProvince = provinces.FirstOrDefault(p => p.Code == fromAddress.ProvinceCode)
-            ?? throw new NotFoundException("From province not found", fromAddress.ProvinceCode);
+        if (fromCity.IsRestricted)
+            return ?? throw new NotFoundException("To city not found");
 
-        var toProvince   = provinces.FirstOrDefault(p => p.Code == toAddress.ProvinceCode)
-            ?? throw new NotFoundException("To province not found", toAddress.ProvinceCode);
+        if (toCity.IsRestricted)
+            return ?? throw new NotFoundException("To city not found");
 
-        // Check restricted trước
-        if (from.IsRestricted)
-            return ZoneResult.Fail($"Không hỗ trợ lấy hàng tại {from.Name}. {from.RestrictedReason}");
+        var cityOverride = cityOverrideRepository.FirstOrDefault(co =>
+            co.FromCityId == fromCity.Id && co.ToCityId == toCity.Id);
+        ?? return cityOverride.Zone;
 
-        if (to.IsRestricted)
-            return ZoneResult.Fail($"Không hỗ trợ giao hàng đến {to.Name}. {to.RestrictedReason}");
+        var zone = (fromCity.Code   == toCity.Code) ? Zones.CITY
+                 : (fromCity.Region == to.Region)   ? Zones.REGION
+                 : Zones.NATION;
 
-        // Check override
-        var overrideZone = _overrides.FirstOrDefault(o =>
-            o.FromProvinceId == from.Id && o.ToProvinceId == to.Id);
-
-        if (overrideZone is not null)
-            return ZoneResult.Ok(Enum.Parse<Zone>(overrideZone.Zone), from, to);
-
-        // Logic mặc định
-        var zone = (from.Code == to.Code) ? Zone.Local
-                 : (from.Region == to.Region) ? Zone.SameRegion
-                 : Zone.CrossRegion;
-
-        return ZoneResult.Ok(zone, from, to);
-    }
-
-    private async Task LoadAsync()
-    {
-        if (provinces is not null) return;
-
-        provinces = await db.Provinces.ToListAsync();
-        overrides = await db.ZoneOverrides.ToListAsync();
+        return zone;
     }
 }

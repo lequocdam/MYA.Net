@@ -6,7 +6,9 @@ public class OrderService(
     IOrderPermissionSpecification orderPermissionSpecification,
     IOrderFilterSpecification orderFilterSpecification,
     // SERVICES
-    IZoneService zoneService,
+    IZoneService    zoneService,
+    IPricingService pricingService,
+    // ENGINES
     IWeightService weightService,
     IEventBus eventBus,
     ILogger<OrderService> logger,
@@ -114,77 +116,68 @@ public class OrderService(
         Guid userId,
         CancellationToken ct)
     {
-        var fromAddress = await addressService.GetById(dto.FromAddressId);
-        var toAddress   = await addressService.GetById(dto.ToAddressId);
+        var fromTask = addressService.GetById(dto.FromAddressId);
+        var toTask   = addressService.GetById(dto.ToAddressId);
 
-        var fromAddressSnapshot = new AddressSnapshot
-        {
-            Name      = fromAddress.Name,
-            Phone     = fromAddress.Phone,
-            City      = fromAddress.City,
-            Ward      = fromAddress.Ward,
-            Street    = fromAddress.Street,
-            Latitude  = fromAddress.Latitude,
-            Longitude = fromAddress.Longitude
-        };
+        await Task.WhenAll(fromTask, toTask);
 
-        var toAddressSnapshot = new AddressSnapshot
-        {
-            Name      = toAddress.Name,
-            Phone     = toAddress.Phone,
-            City      = fromAddress.City,
-            Ward      = toAddress.Ward,
-            Street    = toAddress.Street,
-            Latitude  = toAddress.Latitude,
-            Longitude = toAddress.Longitude
-        };
+        var fromAddress = fromTask.Result;
+        var toAddress   = toTask.Result;
 
-        var warehouse = await warehouseService.GetNearestAsync(
-            fromAddress.City,
-            fromAddress.Ward,
-            fromAddress.Street,
-            fromAddress.Latitude,
-            fromAddress.Longitude,
-            ct);
+        var fromSnapshot = AddressSnapshot.From(fromAddress);
+        var toSnapshot   = AddressSnapshot.From(toAddress);
 
-        var zone   = zoneService.GetZone(fromAddress.Province, toAddress.Province);
-        var weight = weightService.Calculate(dto.Items);
-        var price  = await pricingService.GetAsync(dto.ServiceId, zone, weight, ct);
+        var warehouse = await warehouseService.GetNearestAsync(fromAddress, ct);
+
+        var zone   = await zoneService.GetAsync(fromAddress, toAddress, ct);
+        var weight = await weightService.Calculate(dto.Items);
+        var price  = await pricingService.CalculateAsync(dto.ServiceId, zone, weight, dto.Cod, ct);
 
         using var transaction = await db.Database.BeginTransactionAsync(ct);
         try
         {
-            var order = new Order
-            {
-                Id                  = Guid.NewGuid(),
-                Code                = GenerateCode(),
-                FromAddressSnapshot = fromAddressSnapshot,
-                ToAddressSnapshot   = toAddressSnapshot,
-                Cost                = price.Cost,
-                Fee                 = price.Fee,
-                Total               = price.Total,
-                Status              = OrderStatus.WAITTING,
-                Date                = DateTime.UtcNow,
-                ServiceId           = dto.ServiceId,
-                WarehouseId         = warehouse.Id,
-                UserId              = userId,
-                Items               = mapper.Map<List<Item>>(dto.Items),
-            };
+            var order = Order.Create(
+                userId,
+                dto.ServiceId,
+                warehouse.Id,
+                fromSnapshot,
+                toSnapshot,
+                price.Cost,
+                price.Fee,
+                mapper.Map<List<Item>>(dto.Items));
 
             await orderRepository.AddAsync(order, ct);
-            await orderHistoryRepository.AddAsync(new OrderHistory { ... }, ct);
-            await trackingRepository.AddAsync(new Tracking { ... }, ct);
+
+            await orderHistoryRepository.AddAsync(
+                new OrderHistory
+                {
+                    OrderId = order.Id,
+                    Status = OrderStatus.WAITTING,
+                    CreatedAt = DateTime.UtcNow
+                },
+                ct);
+
+            await trackingRepository.AddAsync(
+                new Tracking
+                {
+                    OrderId = order.Id,
+                    Status = OrderStatus.WAITTING,
+                    CreatedAt = DateTime.UtcNow
+                },
+                ct);
+
             await orderRepository.SaveChangesAsync(ct);
+
             await transaction.CommitAsync(ct);
 
-            await eventBus.Publish(new OrderCreatedEvent { ... });
+            await eventBus.Publish(
+                new OrderCreatedEvent(order.Id));
 
-            return new OrderDto(...);
+            return mapper.Map<OrderDto>(order);
         }
-        catch (Exception e)
+        catch
         {
             await transaction.RollbackAsync(ct);
-            logger.LogError(e, "Create order failed. UserId={UserId}", userId);
             throw;
         }
     }
@@ -207,12 +200,10 @@ public class OrderService(
         {
             FromAddressName    = row.Cell(1).GetString().Trim(),
             FromAddressPhone   = row.Cell(2).GetString().Trim(),
-            FromAddressEmail   = row.Cell(3).GetString().Trim(),
             FromAddressAddress = row.Cell(4).GetString().Trim(),
 
             ToAddressName      = row.Cell(5).GetString().Trim(),
             ToAddressPhone     = row.Cell(6).GetString().Trim(),
-            ToAddressEmail     = row.Cell(7).GetString().Trim(),
             ToAddressAddress   = row.Cell(8).GetString().Trim(),
 
             ServiceName        = row.Cell(9).GetString().Trim(),

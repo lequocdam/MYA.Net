@@ -1,6 +1,6 @@
 public class WeightEngine : IWeightEngine
 {
-    private const decimal divisor = 5000;
+    private const double divisor = 5000;
 
     public double Calculate(List<CreateItemDto> items)
     {
