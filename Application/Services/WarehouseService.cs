@@ -146,23 +146,20 @@ public class WarehouseService(
         await warehouseRepository.SaveChangesAsync(ct);
     }
 
-    public async Task<Guid> ResolveAsync(
-        string province,
-        string district,
-        double latitude,
-        double longitude,
+    public async Task<Guid> GetNearestAsync(
+        Address fromAddress
         CancellationToken ct)
     {
         var warehouse = await warehouseRepository.Query()
-            .Where(w => w.Province == province && w.District == district)
+            .Where(w => w.City == fromAddress.City && w.Ward == fromAddress.Ward)
             .FirstOrDefaultAsync(ct);
             ?? throw new NotFoundException("Warehouse not found");
 
         return warehouse.Id;
 
         warehouse = await warehouseRepository.Query()
-            .Where(w => w.Province == province)
-            .FirstOrDefaultAsync(ct);
+            .Where(w => w.City == fromAddress.City)
+            .FirstOrDefaultAsync(w => w.City == fromAddress.City, ct);
             ?? throw new NotFoundException("Warehouse not found");
 
         return warehouse.Id;

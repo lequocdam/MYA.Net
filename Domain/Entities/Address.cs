@@ -1,30 +1,69 @@
 public class Address
 {
-    public string Name { get; set; }
-    public string Phone { get; set; }
-    public string Mail { get; set; }
-    public string Address { get; set; }
-    public double Latitude  { get; set; }
-    public double Longitude { get; set; }
+    private Guid Id { get; private set; }
+    private Guid UserId { get; private set; }
+    private string Name { get; private set; }
+    private string Phone { get; private set; }
+    private string Street { get; private set; }
+    private Guid WardId { get; private set; }
+    private Guid CityId { get; private set; }
+    private double Latitude { get; private set; }
+    private double Longitude { get; private set; }
+    private bool IsDefault { get; private set; }
+    private bool IsActive { get; private set; }
+
+    public static Address Create(
+        Guid userId,
+        string name,
+        string phone,
+        string street,
+        Guid wardId,
+        Guid cityId,
+        double latitude,
+        double longitude,
+        bool isDefault)
+    {
+        return new Address
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            Name = name,
+            Phone = phone,
+            Street = street,
+            WardId = wardId,
+            CityId = cityId,
+            Latitude = latitude,
+            longitude = longitude,
+            IsDefault = isDefault,
+            IsActive = true
+        };
+    }
+
+    public static void Update(
+        string name,
+        string phone,
+        string street,
+        Guid wardId,
+        Guid cityId,
+        double latitude,
+        double longitude,
+        bool isDefault)
+    {
+        return new Address
+        {
+            Name = name,
+            Phone = phone,
+            Street = street,
+            WardId = wardId,
+            CityId = cityId,
+            Latitude = longitude,
+            longitude = latitude,
+            IsDefault = isDefault
+        };
+    }
 }
 
-// ─────────────────────────────────────────────
-// ENTITY
-// ─────────────────────────────────────────────
 
-public class Address
-{
-    public Guid   Id        { get; set; }
-    public string Name      { get; set; }
-    public string Phone     { get; set; }
-    public string City      { get; set; }
-    public string Ward      { get; set; }
-    public string Street    { get; set; }
-    public double Latitude  { get; set; }
-    public double Longitude { get; set; }
-    public bool   IsDefault { get; set; }
-    public Guid   UserId    { get; set; }
-}
 
 // ─────────────────────────────────────────────
 // DTOs

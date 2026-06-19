@@ -14,25 +14,31 @@ public class TripService : ITripService
         _priceService = priceService;
     }
 
-    public async Task<Guid> Create(CreateTrip dto)
+    public async Task<Guid> CreateAsync(
+        CreateTripDto dto,
+        CancellationToken ct)
     {
-        var trip = new Trip
-        {
-            Id = Guid.NewGuid(),
-            Code = $"MYA-{DateTime.UtcNow.Ticks}",
-            Type = dto.Type,
-            FromId = dto.FromId,
-            ToId = dto.ToId,
-            Status = TripStatus.PREPARED,
-            Date = DateTime.UtcNow,
-            Orders = dto.Orders.Select(o => new Order
-            {
-                OrderId = o
-            }).ToList()
-        };
+        var orders = await orderRepository
+            .Query()
+            .Where(o => dto.OrderIds.Contains(o.Id))
+            .ToListAsync(ct);   
 
-        _context.Trips.Add(trip);
-        await _context.SaveChangesAsync();
+        if (!orders.Any())
+            throw new Exception("Orders not found.");
+
+        await tripRepository.AddAsync(new Trip
+        {
+            Id        = Guid.NewGuid(),
+            Code      = GenerateCode(),
+            Type      = dto.Type,
+            Status    = TripStatus.PREPARED,
+            Date      = DateTime.UtcNow,
+            FromId    = dto.FromId,
+            ToId      = dto.ToId,
+            DriverId  = dto.DriverId,
+            VehicleId = dto.VehicleId,
+            Orders    = orders,
+        }, ct);
 
         return trip.Id;
     }
@@ -54,44 +60,28 @@ public class TripService : ITripService
         await _context.SaveChangesAsync();
     }
 
-    public async Task UpdateStatus(Guid orderId, string trigger, string by)
+    public async Task StartAsync(
+        Guid tripId,
+        Guid driverId,
+        CancellationToken ct)
     {
-        using var tx = await _context.Database.BeginTransactionAsync();
+        var trip = await tripRepository
+            .Query()
+            .FirstOrDefaultAsync(t => t.Id == tripId, ct)
+            ?? throw new NotFoundException("Trip not found");
 
-        var order = await _context.Orders.FindAsync(orderId);
-        if (order == null)
-            throw new Exception("Order not found");
+        if (trip.DriverId != driverId)
+            throw new ForbiddenException();
 
-        var workflow = new OrderWorkflow(order.Status);
+        var orders = await orderRepository
+            .Where(o => o.TripId == tripId)
+            .ToListAsync(ct);
 
-        if (!workflow.Can(trigger))
-            throw new Exception($"Invalid transition: {order.Status} -> {trigger}");
+        if (!orders.Any())
+                throw new NotFoundException("Orders not found");
 
-        var newStatus = workflow.Fire(trigger);
+        orderService.UpdateOrderStatus()
 
-        // update main status
-        order.Status = newStatus;
-
-        // save history
-        _context.OrderStatusHistories.Add(new OrderStatusHistory
-        {
-            OrderId = orderId,
-            Status = newStatus,
-            UpdatedBy = by,
-            CreatedAt = DateTime.UtcNow,
-            Note = trigger
-        });
-
-        await _context.SaveChangesAsync();
-
-        // 🔥 publish event (giống GHN)
-        await _eventBus.Publish(new OrderStatusChangedEvent
-        {
-            OrderId = orderId,
-            Status = newStatus
-        });
-
-        await tx.CommitAsync();
+        await unitOfWork.SaveChangesAsync(ct);
     }
-    
 }

@@ -1,7 +1,12 @@
 public enum OrderStatus
 {
-    WAITTING   = "Waitting",
-    CONFIRMED  = "Confirmed",
-    PICKING_UP = "Picking_up",
-    PICKED_UP  = "Picked_up"
+    PENDING = "Pending",
+    CONFIRMED = "Confirmed",
+    PICKINGUP = "PickingUp",
+    PICKED_UP  = "Picked_up",
+    TRANSITTING = "Transitting",
+    ARRIVED = "Arrived",
+    DELIVERING = "Delivering",
+    COMPLETED = "Completed",
+    CANCELLED = "Calcelled"
 }

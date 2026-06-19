@@ -116,62 +116,58 @@ public class OrderService(
         Guid userId,
         CancellationToken ct)
     {
-        var fromTask = addressService.GetByIdAsync(dto.FromAddressId);
-        var toTask   = addressService.GetByIdAsync(dto.ToAddressId);
+        var addresses = await addressRepository
+            .Query()
+            .Where(a => a.Id == dto.FromAddressId || a.Id == dto.ToAddressId)
+            .ToListAsync(ct);
 
-        await Task.WhenAll(fromTask, toTask);
+        var fromAddress = addresses.FirstOrDefault(a => a.Id == dto.FromAddressId)
+            ?? throw new NotFoundException("From address not found");
 
-        var fromAddress = fromTask.Result;
-        var toAddress   = toTask.Result;
+        var toAddress = addresses.FirstOrDefault(a => a.Id == dto.ToAddressId)
+            ?? throw new NotFoundException("To address not found");
 
-        var fromSnapshot = AddressSnapshot.From(fromAddress);
-        var toSnapshot   = AddressSnapshot.From(toAddress);
+        var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
 
-        var warehouse = await warehouseService.GetNearestAsync(fromAddress, ct);
+        var zone = await zoneService.GetAsync(fromAddress, toAddress, ct);
+        var pricing = await pricingService.GetAsync(zone, dto.ServiceId, ct);
 
-        var zone   = await zoneService.GetAsync(fromAddress, toAddress, ct);
-        var weight = await weightService.Calculate(dto.Items);
-        var price  = await pricingService.CalculateAsync(dto.ServiceId, zone, weight, dto.Cod, ct);
+        var weight = await weightEngine.Calculate(dto.Items);
+        var price = await priceEngine.Calculate(weight, pricing);
 
         using var transaction = await db.Database.BeginTransactionAsync(ct);
+
         try
         {
-            var order = Order.Create(
-                userId,
+            await orderRepository.AddAsync(Order.Create(
+                GenerateCode(),
+                AddressSnapshot.Create(fromAddress),
+                AddressSnapshot.Create(toAddress),
                 dto.ServiceId,
                 warehouse.Id,
-                fromSnapshot,
-                toSnapshot,
+                dto.Items,
                 price.Cost,
                 price.Fee,
-                dto.Items);
+                price.CodFee,
+                price.Total), ct);
 
-            await orderRepository.AddAsync(order, ct);
+            await orderHistoryRepository.AddAsync(OrderHistory.Create(
+                Id = Guid.NewGuid(),
+                OrderId = order.Id,
+                Status = OrderStatus.Waitting,
+                CreatedAt = DateTime.UtcNow), ct);
 
-            await orderHistoryRepository.AddAsync(
-                new OrderHistory
-                {
-                    OrderId = order.Id,
-                    Status = OrderStatus.WAITTING,
-                    CreatedAt = DateTime.UtcNow
-                },
-                ct);
+            await trackingRepository.AddAsync(Tracking.Create(
+                Id = Guid.NewGuid(),
+                OrderId = order.Id,
+                Status = OrderStatus.Waitting,
+                CreatedAt = DateTime.UtcNow), ct);
 
-            await trackingRepository.AddAsync(
-                new Tracking
-                {
-                    OrderId = order.Id,
-                    Status = OrderStatus.WAITTING,
-                    CreatedAt = DateTime.UtcNow
-                },
-                ct);
-
-            await orderRepository.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(ct);
 
             await transaction.CommitAsync(ct);
 
-            await eventBus.Publish(
-                new OrderCreatedEvent(order.Id));
+            await eventBus.Publish(new OrderCreatedEvent(order.Id));
 
             return mapper.Map<OrderDto>(order);
         }
@@ -335,6 +331,23 @@ public class OrderService(
         Guid userId, 
         CancellationToken ct)
     {
+        var addresses = await addressRepository
+            .Query()
+            .Where(a => a.Id == dto.FromAddressId || a.Id == dto.ToAddressId)
+            .ToListAsync(ct);
+
+        var fromAddress = addresses.FirstOrDefault(a => a.Id == dto.FromAddressId)
+            ?? throw new NotFoundException("From address not found");
+
+        var toAddress = addresses.FirstOrDefault(a => a.Id == dto.ToAddressId)
+            ?? throw new NotFoundException("To address not found");
+
+        var zone = await zoneService.GetAsync(fromAddress, toAddress, ct);
+        var pricing = await pricingService.GetAsync(zone, dto.ServiceId, ct);
+
+        var weight = await weightEngine.Calculate(dto.Items);
+        var price = await priceEngine.Calculate(weight, pricing);
+
         using var transaction = await db.Database.BeginTransactionAsync();
 
         try
@@ -347,45 +360,18 @@ public class OrderService(
             if (order.UserId != userId)
                 throw new ForbiddenException("Không có quyền cập nhật đơn hàng");
 
-            if (order.Status != OrderStatus.WAITTING)
+            if (order.Status != OrderStatus.PENDING)
                 throw new InvalidOrderTransitionException("Không có quyền cập nhật đơn hàng khi đang chờ");
 
-            var fromAddressTask = await addressRepository.Query()
-                .FirstOrDefaultAsync(a => a.Id == dto.FromAddressId, ct)
-                ?? throw new NotFoundException("Address not found");
-
-            var toAddressTask = await addressRepository.Query()
-                .FirstOrDefaultAsync(a => a.Id == dto.ToAddressId, ct)
-                ?? throw new NotFoundException("Address not found");
-
-            await Task.WhenAll(fromAddressTask, toAddressTask);
-
-            var fromAddress = fromTask.Result;
-            var toAddress   = toTask.Result;
-
-            var items  = dto.Items.Select(i => new ItemUpdate(
-                i.Id, 
-                i.Name, 
-                i.Quantity, 
-                i.Weight, 
-                i.Length, 
-                i.Width, 
-                i.Height))
-                .ToList();
-
-            var zone   = await zoneService.GetAsync(fromAddress.ProvinceCode, toAddress.ProvinceCode, ct);
-            var weight = weightService.Calculate(items);
-            var price  = await pricingService.CalculateAsync(dto.ServiceId, zone, weight, dto.Cod, ct);
-
             order.Update(
-                AddressSnapshot.From(fromAddress),
-                AddressSnapshot.From(toAddress),
-                dto.ServiceId,
+                AddressSnapshot.Create(fromAddress),
+                AddressSnapshot.Create(toAddress),
+                order.ServiceId,
                 price.Cost,
                 price.Fee,
-                price.Total);
+                price.Total, ct);
 
-            order.UpdateItems(items);
+            order.UpdateItems(dto.Items);
 
             await ordesrHistoryRepository.AddAsync(new OrderHistory
             {
@@ -418,20 +404,35 @@ public class OrderService(
 
     public async Task<EstimateD> Estimate(EstimateDTO dto)
     {
-        var zone = _zoneService.GetZone(dto.sender, dto.receiver);
-        var weight = _weightService.Calculate(dto.Items);
+        var addresses = await addressRepository
+            .Query()
+            .Where(a => a.Id == dto.FromAddressId || a.Id == dto.ToAddressId)
+            .ToListAsync(ct);
 
-        var price = _priceService.Calculate(
-            zone,
+        var fromAddress = addresses.FirstOrDefault(a => a.Id == dto.FromAddressId)
+            ?? throw new NotFoundException("From address not found");
+
+        var toAddress = addresses.FirstOrDefault(a => a.Id == dto.ToAddressId)
+            ?? throw new NotFoundException("To address not found");
+
+        var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
+
+        var weight = weightService.Calculate(dto.Items);
+
+        var price = await pricingService.CalculateAsync(
+            dto.ServiceId,
+            fromAddress,
+            toAddress,
             weight,
-        );
+            dto.Cod,
+            ct);
 
-        var deliveryDays = zone switch
+        var days = zone.Value switch
         {
-            "Internal" => 1,
-            "SameRegion" => 2,
-            "CrossRegion" => 4,
-            _ => 5
+            Zone.WARD => 1,
+            Zone.CITY => 2,
+            Zone.REGION => 4,
+            Zone.NATION => 7,
         };
 
         return new EstimateDTO
@@ -450,42 +451,54 @@ public class OrderService(
         };
     }
 
-    /*public async Task UpdateStatus(Guid orderId, string trigger, Guid userId)
+    public async Task UpdateOrderStatus(
+        UpdateOrderStatusDto dto,
+        Guid userId,
+        CancellationToken ct)
     {
         using var transaction = await _context.Database.BeginTransactionAsync();
 
         try
         {
-            var order = await _context.Orders.FindAsync(orderId)
-                ?? throw new NotFoundException("Order", orderId);
+            var orders = await db.Orders
+                .Where(o => dto.OrderIds.Contains(o.Id))
+                .ToListAsync(ct);
 
-            var workflow = new OrderWorkflow(order.Status);
+            if (!orders.Any())
+                throw new NotFoundException("Orders not found");
 
-            if (!workflow.Can(trigger))
-                throw new InvalidOrderTransitionException(order.Status, trigger);
-
-            var now       = DateTime.UtcNow;
-            var newStatus = workflow.Fire(trigger);
-            order.Status  = newStatus;
-
-            _context.OrderHistories.Add(new OrderHistory
+            foreach (var order in orders)
             {
-                OrderId = orderId,
-                UserId  = userId,
-                Status  = newStatus,
-                Note    = trigger,
-                Date    = now
-            });
+                var workflow = new OrderWorkflow(order.Status);
 
-            _context.Tracking.Add(new Tracking
-            {
-                OrderId = orderId,
-                Status  = newStatus,
-                Message = GetTrackingMessage(newStatus),
-                Date    = now
-            });
+                if (!workflow.Can(dto.Trigger))
+                    continue;
 
-            await _context.SaveChangesAsync();
+                var newStatus = workflow.Fire(dto.Trigger);
+
+                order.Status = newStatus;
+
+                histories.Add(new OrderHistory
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = order.Id,
+                    UserId = userId,
+                    Status = newStatus,
+                    Note = dto.Trigger,
+                    Date = now
+                });
+
+                trackings.Add(new Tracking
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = order.Id,
+                    Status = newStatus,
+                    Message = GetTrackingMessage(newStatus),
+                    Date = now
+                });
+            }
+
+            await db.SaveChangesAsync();
             await transaction.CommitAsync();
 
             await _eventBus.Publish(new OrderStatusChangedEvent
@@ -502,7 +515,7 @@ public class OrderService(
                 orderId, trigger);
             throw;
         }
-    */}
+    }
 
     public async Task ConfirmAsync(
         ConfirmDto dto,
@@ -653,6 +666,67 @@ public class OrderService(
             await transaction.RollbackAsync(ct);
             throw;
         }
+    }
+
+    public async Task<BulkResultDto> TransitionAsync(
+    BulkTransitionDto dto,
+    Guid userId,
+    string role,
+    CancellationToken ct)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var orders = await db.Orders
+                .Where(o => dto.OrderIds.Contains(o.Id))
+                .ToListAsync(ct);
+
+            var succeeded = new List<Guid>();
+            var failed    = new List<BulkErrorDto>();
+            var now       = DateTime.UtcNow;
+            var histories = new List<OrderHistory>();
+            var trackings = new List<Tracking>();
+
+            foreach (var order in orders)
+            {
+                var workflow = new OrderWorkflow(order.Status);
+
+                if (!workflow.Can(dto.Trigger))
+                {
+                    failed.Add(new BulkErrorDto(order.Id,
+                        $"Không thể chuyển '{order.Status}' với trigger '{dto.Trigger}'"));
+                    continue;
+                }
+
+                var newStatus = workflow.Fire(dto.Trigger);
+                order.Status  = newStatus;
+
+                histories.Add(new OrderHistory { ... });
+                trackings.Add(new Tracking { ... });
+                succeeded.Add(order.Id);
+            }
+
+            db.OrderHistories.AddRange(histories);
+            db.Trackings.AddRange(trackings);
+
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch (Exception e)
+        {
+            await transaction.RollbackAsync(ct);
+            logger.LogError(e, "TransitionAsync failed. Trigger={Trigger}", dto.Trigger);
+            throw;
+        }
+
+        // Publish sau commit
+        foreach (var orderId in succeeded)
+        {
+            try { await eventBus.Publish(new OrderStatusChangedEvent(orderId)); }
+            catch (Exception e) { logger.LogWarning(e, "Publish failed. OrderId={OrderId}", orderId); }
+        }
+
+        return new BulkResultDto(succeeded, failed);
     }
 
     // ─────────────────────────────────────────────

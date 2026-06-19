@@ -9,40 +9,38 @@ public class AddressService(
     {
         return await addressRepository.Query()
             .AsNoTracking()
-            .Where(a => a.UserId == userId)
+            .Where(a => a.UserId == userId && a.IsActive)
             .OrderByDescending(a => a.IsDefault)
             .Select(a => new AddressDto(
                 a.Id,
                 a.Name,
                 a.Phone,
-                a.City,
-                a.Ward,
                 a.Street,
+                a.WardId,
+                a.CityId,
                 a.IsDefault))
             .ToListAsync(ct);
     }
 
     public async Task<AddressDto> CreateAsync(
-        CreateAddressDto dto,
         Guid userId,
+        CreateAddressDto dto,
         CancellationToken ct)
     {
         if (dto.IsDefault)
             await ClearDefaultAsync(userId, ct);
 
-        var address = new Address
-        {
-            Id        = Guid.NewGuid(),
-            Name      = dto.Name,
-            Phone     = dto.Phone,
-            City      = dto.City,
-            Ward      = dto.Ward,
-            Street    = dto.Street,
-            Latitude  = dto.Latitude,
-            Longitude = dto.Longitude,
-            IsDefault = dto.IsDefault,
-            UserId    = userId
-        };
+        var address = Address.Create(
+            userId,
+            dto.Name,
+            dto.Phone,
+            dto.Street,
+            dto.WardId,
+            dto.CityId,
+            dto.Latitude,
+            dto.Longitude,
+            dto.IsDefault  
+        )
 
         await addressRepository.AddAsync(address, ct);
         await addressRepository.SaveChangesAsync(ct);
@@ -50,29 +48,35 @@ public class AddressService(
         return mapper.Map<AddressDto>(address);
     }
 
-    public async Task UpdateAsync(
+    public async Task<AddressDto> UpdateAsync(
         Guid id,
         UpdateAddressDto dto,
         Guid userId,
         CancellationToken ct)
     {
         var address = await addressRepository.Query()
-            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId, ct)
+            .FirstOrDefaultAsync(a => a.Id == id 
+                    && a.UserId == userId
+                    && a.IsActive, ct)
             ?? throw new NotFoundException("Address not found");
 
         if (dto.IsDefault && !address.IsDefault)
             await ClearDefaultAsync(userId, ct);
 
-        address.Name      = dto.Name;
-        address.Phone     = dto.Phone;
-        address.City      = dto.City;
-        address.Ward      = dto.Ward;
-        address.Street    = dto.Street;
-        address.Latitude  = dto.Latitude;
-        address.Longitude = dto.Longitude;
-        address.IsDefault = dto.IsDefault;
+        address.Update(
+            dto.Name,
+            dto.Phone,
+            dto.Street,
+            dto.WardId,
+            dto.CityId,
+            dto.Latitude,
+            dto.Longitude,
+            dto.IsDefault  
+        )
 
         await addressRepository.SaveChangesAsync(ct);
+
+        return mapper.Map<AddressDto>(address);
     }
 
     public async Task DeleteAsync(
@@ -81,7 +85,9 @@ public class AddressService(
         CancellationToken ct)
     {
         var address = await addressRepository.Query()
-            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId, ct)
+            .FirstOrDefaultAsync(a => a.Id == id 
+                    && a.UserId == userId
+                    && a.IsActive, ct)
             ?? throw new NotFoundException("Address not found");
 
         if (address.IsDefault)
@@ -92,27 +98,12 @@ public class AddressService(
         await addressRepository.SaveChangesAsync(ct);
     }
 
-    public async Task SetDefaultAsync(
-        Guid id,
-        Guid userId,
-        CancellationToken ct)
-    {
-        var address = await addressRepository.Query()
-            .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId, ct)
-            ?? throw new NotFoundException("Address", id);
-
-        if (address.IsDefault) return;
-
-        await ClearDefaultAsync(userId, ct);
-
-        address.IsDefault = true;
-        await addressRepository.SaveChangesAsync(ct);
-    }
-
     private async Task ClearDefaultAsync(Guid userId, CancellationToken ct)
     {
         await addressRepository.Query()
-            .Where(a => a.UserId == userId && a.IsDefault)
+            .Where(a => a.UserId == userId 
+                && a.IsDefault
+                && a.IsActive)
             .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsDefault, false), ct);
     }
 }

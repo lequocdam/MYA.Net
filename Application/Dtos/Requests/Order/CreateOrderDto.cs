@@ -1,12 +1,10 @@
 public class CreateOrderDto
 {
-    public Guid FromAddressId { get; set; }
+    private Guid FromAddressId { get; set; }
 
-    public Guid ToAddressId { get; set; }
+    private Guid ToAddressId { get; set; }
 
-    public Guid ServiceId { get; set; }
+    private decimal? Cod { get; set; }
 
-    public Guid WarehouseId { get; set; }
-
-    public List<CreateItemDto> Items { get; set; }
+    private List<CreateItemDto> Items { get; set; } = [];
 }

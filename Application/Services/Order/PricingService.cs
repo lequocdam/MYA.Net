@@ -1,51 +1,62 @@
 public class PricingService(
-    IPricingRepository pricingRepository
-) : IPricingService
+    IPricingRepository pricingRepository,
+    IZoneService zoneService) : IPricingService
 {
-    public async Task<PriceDto> CalculateAsync(
+    public async Task<PriceResult> CalculateAsync(
         Guid      serviceId,
-        Zone      zone,
-        double    weight,
-        decimal?  cod,
+        Address   fromAddress,
+        Address   toAddress,
+        decimal   weight,
+        decimal   cod,
         CancellationToken ct)
     {
-        var pricing = await pricingRepository.GetAsync(serviceId, zone, ct)
+        var zone = await zoneService.GetAsync(
+            fromAddress,
+            toAddress,
+            ct);
+
+        var pricing = await pricingRepository
+            .Query()
+            .FirstOrDefaultAsync(
+                p => p.ServiceId == serviceIdserviceId
+                  && p.Zone == zone, ct)
             ?? throw new NotFoundException("Pricing not found");
 
-        var cost      = CalculateCost(pricing, weight);
-        var codFee    = CalculateCodFee(pricing, cod);
-        var remoteFee = CalculateRemoteFee(pricing, zone);
-        var fee       = codFee + remoteFee;
-
-        return new PriceDto(
-            Cost      : cost,
-            CodFee    : codFee,
-            RemoteFee : remoteFee,
-            Fee       : fee,
-            Total     : cost + fee
-        );
+        return CalculatePrice(weight, cod, pricing);
     }
 
-    private static decimal CalculateCost(Pricing pricing, double weight)
+    private static Price Calculate(Pricing pricing, decimal weight, decimal cod)
+    {
+        var cost = CalculateCost(pricing, weight);
+        var codFee = CalculateCodFee(pricing, cod);
+        var fee    = codFee;
+        var total  = cost + fee;
+
+        return new Price
+        {
+            Cost = cost,
+            CodFee = codFee,
+            Fee = fee,
+            Total = total
+        };
+    }
+
+    private static decimal CalculateCost(decimal weight, Pricing pricing)
     {
         if (weight <= pricing.BaseWeight)
             return pricing.BaseCost;
 
         var extraWeight = weight - pricing.BaseWeight;
-        var extraSteps  = Math.Ceiling(extraWeight / pricing.NextWeight);
+        var extraSteps  = Math.Ceiling(extraWeight / pricing.Step);
 
-        return pricing.BaseCost + (decimal)extraSteps * pricing.AddedCost;
+        return pricing.BaseCost + (extraSteps * pricing.ExtraCost);
     }
 
-    private static decimal CalculateCodFee(Pricing pricing, decimal? codAmount)
+    private static decimal CalculateCodFee(decimal cod, Pricing pricing)
     {
-        if (codAmount is null or 0) return 0;
+        if (cod == 0) return 0;
 
-        // Phí COD = % trên giá trị thu hộ, tối thiểu MinCodFee
-        var fee = codAmount.Value * pricing.CodFeeRate;
-        return Math.Max(fee, pricing.MinCodFee);
+        var codFee = cod * pricing.CodFeeRate;
+        return Math.Max(codFee, pricing.MinCodFee);
     }
-
-    private static decimal CalculateRemoteFee(Pricing pricing, Zone zone) =>
-        zone == Zone.Remote ? pricing.RemoteFee : 0;
 }

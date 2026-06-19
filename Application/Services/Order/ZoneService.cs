@@ -1,29 +1,39 @@
 public class ZoneService(
     ICityRepository cityRepository,
-    ICityOverrideRepository cityOverrideRepository) : IZoneService
+    IWardRepository wardRepository,
+    ICityOverrideRepository cityOverrideRepository): IZoneService
 {
 
-    public async Task<ZoneResult> GetByIdAsync(Guid FromCityCode, Guid ToCityCode )
+    public async Task<Zones> GetAsync(
+        Address fromAddress, 
+        Address toAddress)
     {
-        var fromCity = cityRepository.FirstOrDefault(c => c.Code == fromAddress.Code)
+        var fromCityTask = await  cityRepository.FirstOrDefault(c => c.Id == fromAddress.CityId)
             ?? throw new NotFoundException("From city not found");
 
-        var toCity   = cityRepository.FirstOrDefault(c => c.Code == toAddress.Code)
+        var toCityTask = await cityRepository.FirstOrDefault(c => c.Id == toAddress.CityId)
             ?? throw new NotFoundException("To city not found");
 
+        var fromWard = await wardRepository.FirstOrDefault(w => w.Id == fromAddress.WardId)
+            ?? throw new NotFoundException("From ward not found");
+
+        var toWard = await wardRepository.FirstOrDefault(w => w.Id == toAddress.WardId)
+            ?? throw new NotFoundException("To ward not found");
+
         if (fromCity.IsRestricted)
-            return ?? throw new NotFoundException("To city not found");
+            return ?? throw new BusinessException("From city is restricted");
 
         if (toCity.IsRestricted)
-            return ?? throw new NotFoundException("To city not found");
+            return ?? throw new BusinessException("To city is restricted");
 
         var cityOverride = cityOverrideRepository.FirstOrDefault(co =>
             co.FromCityId == fromCity.Id && co.ToCityId == toCity.Id);
         ?? return cityOverride.Zone;
 
-        var zone = (fromCity.Code   == toCity.Code) ? Zones.CITY
-                 : (fromCity.Region == to.Region)   ? Zones.REGION
-                 : Zones.NATION;
+        var zone = (fromWard.Id == toWard.Id) ? Zones.WARD
+            : (fromCity.Id == toCity.Id) ? Zones.CITY
+            : (fromCity.Region == toCity.Region) ? Zones.REGION
+            : Zones.NATION;
 
         return zone;
     }

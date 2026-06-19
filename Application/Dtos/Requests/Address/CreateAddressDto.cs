@@ -1,7 +1,5 @@
-public class AddressDto
+public class CreateAddressDto
 {
-    public Guid Id { get; set; }
-
     public string Name { get; set; }
 
     public string Phone { get; set; }
@@ -11,6 +9,10 @@ public class AddressDto
     public Guid WardId { get; set; }
 
     public Guid CityId { get; set; }
+
+    public double Latitude { get; set; }
+
+    public double Longitude { get; set; }
 
     public bool IsDefault { get; set; }
 }
