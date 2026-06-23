@@ -113,20 +113,26 @@ public class OrderService(
     {
         var addresses = await addressRepository.Query()
             .Where(a => a.Id == dto.FromAddressId || a.Id == dto.ToAddressId)
+            .Select(a => new Address(
+                a.Id,
+                a.WardId,
+                a.CityId,
+                a.Latitude,
+                a.Longitude))
             .ToListAsync(ct);
 
-        var fromAddress = addresses.FirstOrDefault(a => a.Id == dto.FromAddressId)
-            ?? throw new NotFoundException("From address", dto.FromAddressId);
+        var fromAddress = addresses.FirstOrDefaultAsync(a => a.Id == dto.FromAddressId)
+            ?? throw new NotFoundException("From address not found");
 
-        var toAddress = addresses.FirstOrDefault(a => a.Id == dto.ToAddressId)
-            ?? throw new NotFoundException("To address", dto.ToAddressId);
+        var toAddress = addresses.FirstOrDefaultAsync(a => a.Id == dto.ToAddressId)
+            ?? throw new NotFoundException("To address not found");
 
         var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
-        var weight = weightService.Calculate(dto.Items);
-        var price = await pricingService.CalculateAsync(
+        var zone = zoneService.
+        var weight = weightEngine.Calculate(dto.Items);
+        var price = await pricingService.GetAsync(
             dto.ServiceId, 
-            fromAddress, 
-            toAddress, 
+            zoneId,
             weight, 
             dto.Cod, ct);
         var code = await GenerateUniqueCodeAsync(ct);
@@ -410,18 +416,11 @@ public class OrderService(
             days);
     }
 
-    // ─────────────────────────────────────────────
-    // TRANSITION (Staff/Admin)
-    // ─────────────────────────────────────────────
     public async Task<BulkResultDto> TransitionAsync(
         BulkTransitionDto dto,
         Guid userId,
-        string role,
         CancellationToken ct)
     {
-        if (role != "Admin" && role != "Staff")
-            throw new ForbiddenException("Không có quyền thực hiện thao tác này");
-
         if (!OrderTrigger.AllowedForStaff.Contains(dto.Trigger))
             throw new BadRequestException($"Trigger '{dto.Trigger}' không hợp lệ");
 
@@ -505,12 +504,12 @@ public class OrderService(
 
             await orderHistoryRepository.AddAsync(new OrderHistory
             {
-                Id      = Guid.NewGuid(),
+                Id = Guid.NewGuid(),
                 OrderId = order.Id,
-                UserId  = userId,
-                Status  = OrderStatus.Pending,
-                Note    = "Đã tạo đơn hàng",
-                Date    = DateTime.UtcNow,
+                UserId = userId,
+                Status = OrderStatus.Pending,
+                Note = "Đã tạo đơn hàng",
+                Date = DateTime.UtcNow,
             }, ct);
 
             await trackingRepository.AddAsync(new Tracking
@@ -561,7 +560,7 @@ public class OrderService(
                 .ToListAsync(ct);
 
             if (!orders.Any())
-                throw new NotFoundException("Không tìm thấy đơn hàng nào");
+                throw new NotFoundException("Orders not found");
 
             var now       = DateTime.UtcNow;
             var histories = new List<OrderHistory>();

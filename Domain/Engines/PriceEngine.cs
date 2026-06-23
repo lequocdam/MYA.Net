@@ -1,31 +1,34 @@
-public class PriceEngine : IPriceEngine
-{
-    public decimal Calculate(decimal weight, decimal cod, Pricing pricing)
+ivate static Price Calculate(Pricing pricing, decimal weight, decimal cod)
     {
-        var cost = CalculateCost(weight, pricing);
-        var codFee = CalculateCodFee(cod, pricing);
-        var fee = codFee + codFee;
-        var total = cost + fee;
+        var cost = CalculateCost(pricing, weight);
+        var codFee = CalculateCodFee(pricing, cod);
+        var fee    = codFee;
+        var total  = cost + fee;
 
-        return
+        return new Price
+        {
+            Cost = cost,
+            CodFee = codFee,
+            Fee = fee,
+            Total = total
+        };
     }
 
-    private decimal CalculateCost(decimal weight, Pricing pricing)
+    private static decimal CalculateCost(decimal weight, Pricing pricing)
     {
         if (weight <= pricing.BaseWeight)
             return pricing.BaseCost;
 
-        var extraWeights = weight - pricing.BaseWeight;
-        var extraSteps = Math.Ceiling(extraWeight / pricing.Step);
+        var extraWeight = weight - pricing.BaseWeight;
+        var extraSteps  = Math.Ceiling(extraWeight / pricing.Step);
 
         return pricing.BaseCost + (extraSteps * pricing.ExtraCost);
     }
 
-    private decimal CalculateCodFee(Pricing pricing, decimal cod)
+    private static decimal CalculateCodFee(decimal cod, Pricing pricing)
     {
-        if (cod is null or 0) return 0;
+        if (cod == 0) return 0;
 
-        var codFee = cod * pricing.Rate;
+        var codFee = cod * pricing.CodFeeRate;
         return Math.Max(codFee, pricing.MinCodFee);
     }
-}
