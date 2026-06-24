@@ -127,35 +127,27 @@ public class OrderService(
         var toAddress = addresses.FirstOrDefaultAsync(a => a.Id == dto.ToAddressId)
             ?? throw new NotFoundException("To address not found");
 
+        var fromAddressSnapshot = 
+
         var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
-        var zone = zoneService.
+        var zone = await zoneService.GetAsync(fromAddress, toAddress);
         var weight = weightEngine.Calculate(dto.Items);
         var price = await pricingService.GetAsync(
             dto.ServiceId, 
             zoneId,
             weight, 
             dto.Cod, ct);
-        var code = await GenerateUniqueCodeAsync(ct);
+
+        var items = 
 
         return await CreateCoreAsync(
-            code,
-            userId,
+            fromAddress,
+            toAddress,
             dto.ServiceId,
-            warehouse.Id,
-            AddressSnapshot.From(fromAddress),
-            AddressSnapshot.From(toAddress),
+            warehouseId,
             price,
-            dto.Items.Select(i => new Item
-            {
-                Id       = Guid.NewGuid(),
-                Image    = i.Image,
-                Name     = i.Name,
-                Quantity = i.Quantity,
-                Weight   = i.Weight,
-                Length   = i.Length,
-                Width    = i.Width,
-                Height   = i.Height,
-            }).ToList(), ct);
+            userId,
+            dto.Items)
     }
 
     // ─────────────────────────────────────────────
@@ -474,51 +466,81 @@ public class OrderService(
     }
 
     private async Task<OrderDto> CreateCoreAsync(
-        string code,
-        Guid userId,
+        Address fromAddress,
+        Address toAddress,
         Guid serviceId,
         Guid warehouseId,
-        AddressSnapshot fromAddressSnapshot,
-        AddressSnapshot toAddressSnapshot,
         Price price,
+        Guid userId,
         List<Item> items,
         CancellationToken ct)
     {
         await using var transaction = await orderRepository.BeginTransactionAsync(ct);
         try
         {
-            var order = Order.Create(
-                code,
-                userId,
+            var order = new AddressSnapshot
+            {
+                Id = Guid.NewGuid(),
+                Code = GenerateCode(),
                 serviceId,
                 warehouseId,
-                fromAddressSnapshot,
-                toAddressSnapshot,
                 price.Cost,
                 price.Fee,
-                price.CodFee,
                 price.Total,
-                items);
+                userId,
+                 Items = items
+                .Select(i => new Item(
+                    i.Image,
+                    i.Name,
+                    i.Quantity,
+                    i.Weight,
+                    i.Length,
+                    i.Width,
+                    i.Height))
+                .ToList()
+            }
 
             await orderRepository.AddAsync(order, ct);
 
-            await orderHistoryRepository.AddAsync(new OrderHistory
+            await addressSnapshotRepository.AddAsync(new AddressSnapshot
             {
                 Id = Guid.NewGuid(),
+                Name = fromAddress.Name,
+                Phone = fromAddress.Phone,
+                Street = fromAddress.Street,
+                Ward = fromAddress.Ward,
+                City = fromAddress.City,
                 OrderId = order.Id,
-                UserId = userId,
-                Status = OrderStatus.Pending,
-                Note = "Đã tạo đơn hàng",
+            }, ct);
+
+            await addressSnapshotRepository.AddAsync(new AddressSnapshot
+            {
+                Id = Guid.NewGuid(),
+                Name = toAddress.Name,
+                Phone = toAddress.Phone,
+                Street = toAddress.Street,
+                Ward = toAddress.Ward,
+                City = toAddress.City,
+                OrderId = order.Id,
+            }, ct);
+
+            await historyRepository.AddAsync(new History
+            {
+                Id = Guid.NewGuid(),
                 Date = DateTime.UtcNow,
+                OrderId = order.Id,
+                Status = order.Status,
+                Note = "",
+                UserId = userId,
             }, ct);
 
             await trackingRepository.AddAsync(new Tracking
             {
-                Id      = Guid.NewGuid(),
+                Id = Guid.NewGuid(),
+                Date = DateTime.UtcNow,
                 OrderId = order.Id,
-                Status  = OrderStatus.Pending,
+                Status = order.Status,
                 Message = GetTrackingMessage(OrderStatus.Pending),
-                Date    = DateTime.UtcNow,
             }, ct);
 
             await orderRepository.SaveChangesAsync(ct);

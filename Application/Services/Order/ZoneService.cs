@@ -8,11 +8,15 @@ public class ZoneService(
         Address fromAddress, 
         Address toAddress)
     {
-        var fromCityTask = await  cityRepository.FirstOrDefault(c => c.Id == fromAddress.CityId)
-            ?? throw new NotFoundException("From city not found");
-
-        var toCityTask = await cityRepository.FirstOrDefault(c => c.Id == toAddress.CityId)
-            ?? throw new NotFoundException("To city not found");
+        var cities = await cityRepository.Query()
+            .Where(c => c.Id == fromAddress.Id || c.Id == toAddress.Id)
+            .Select(a => new City(
+                a.Id,
+                a.WardId,
+                a.CityId,
+                a.Latitude,
+                a.Longitude))
+            .ToListAsync(ct);
 
         var fromWard = await wardRepository.FirstOrDefault(w => w.Id == fromAddress.WardId)
             ?? throw new NotFoundException("From ward not found");
