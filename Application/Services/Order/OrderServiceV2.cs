@@ -16,29 +16,39 @@ public class OrderService(
 {
     public async Task<OrderPageDto> GetAllAsync(
         OrderFilterDto filter,
-        Guid           userId,
-        string         role,
-        Guid?          warehouseId,
+        Guid userId,
+        string role,
+        Guid? warehouseId,
         CancellationToken ct)
     {
-        var query = orderRepository.Query();
+        var query = orderRepository.Query()
+            .AsNoTracking();
 
-        query = orderPermissionSpec.Apply(query, userId, role, warehouseId);
-        query = orderFilterSpec.Apply(query, filter);
+        query = orderPermissionSpec.Apply(
+            query,
+            userId,
+            role,
+            warehouseId);
+
+        query = orderFilterSpec.Apply(
+            query,
+            filter);
 
         var total = await query.CountAsync(ct);
-        var skip  = (filter.Page - 1) * filter.PageSize;
 
         var orders = await query
             .OrderByDescending(x => x.Date)
-            .Skip(skip)
+            .Skip((filter.Page - 1) * filter.PageSize)
             .Take(filter.PageSize)
             .Select(x => new OrderDto(
                 x.Id,
                 x.Code,
-                x.Date,
-                x.Total,
-                x.Status))
+                o.Status,
+                o.Date,
+                o.ServiceId,
+                o.WarehouseId
+                o.UserId,
+                o.Total))
             .ToListAsync(ct);
 
         return new OrderPageDto(
@@ -54,7 +64,7 @@ public class OrderService(
     public async Task<OrderDetailDto> GetDetailAsync(
         Guid orderId,
         Guid userId,
-        string role,
+        string role,    
         Guid? warehouseId,
         CancellationToken ct)
     {
@@ -107,63 +117,51 @@ public class OrderService(
     }
 
     public async Task<OrderDto> CreateAsync(
-        CreateOrderDto dto,
+        CreateDto dto,
         Guid userId,
         CancellationToken ct)
     {
-        var addresses = await addressRepository.Query()
-            .Where(a => a.Id == dto.FromAddressId || a.Id == dto.ToAddressId)
-            .Select(a => new Address(
-                a.Id,
-                a.WardId,
-                a.CityId,
-                a.Latitude,
-                a.Longitude))
-            .ToListAsync(ct);
+        var fromAddress = addressRepository.GetById(dto.FromAddressId);
+        var toAddress = addressRepository.GetById(dto.ToAddressId);
 
-        var fromAddress = addresses.FirstOrDefaultAsync(a => a.Id == dto.FromAddressId)
-            ?? throw new NotFoundException("From address not found");
-
-        var toAddress = addresses.FirstOrDefaultAsync(a => a.Id == dto.ToAddressId)
-            ?? throw new NotFoundException("To address not found");
-
-        var fromAddressSnapshot = 
+        var items = mapper.Map(dto.Items);
 
         var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
-        var zone = await zoneService.GetAsync(fromAddress, toAddress);
-        var weight = weightEngine.Calculate(dto.Items);
-        var price = await pricingService.GetAsync(
-            dto.ServiceId, 
-            zoneId,
-            weight, 
-            dto.Cod, ct);
 
-        var items = 
-
-        return await CreateCoreAsync(
+        var quote = await quoteService.GetAsync(
+            dto.ServiceId,
             fromAddress,
             toAddress,
+            dto.Cod,
+            items,
+            ct);
+
+        var createContext = new CreateContext(
             dto.ServiceId,
-            warehouseId,
-            price,
             userId,
-            dto.Items)
+            warehouse.Id,
+            fromAddress,
+            toAddress,
+            dto.Cod,
+            quote,
+            items);
+
+        return await CreateCoreAsync(
+            createContext,
+            ct);
     }
 
-    // ─────────────────────────────────────────────
-    // CREATE LIST
-    // ─────────────────────────────────────────────
     public async Task<OrderListDto> CreateListAsync(
-        IFormFile file,
-        Guid userId,
+        IFormFile         file,
+        Guid              userId,
         CancellationToken ct)
     {
         using var stream   = file.OpenReadStream();
         using var workbook = new XLWorkbook(stream);
-
+ 
         var sheet = workbook.Worksheet("Orders")
             ?? throw new BadRequestException("Orders sheet not found");
-
+ 
         var rows = sheet
             .RowsUsed()
             .Skip(1)
@@ -190,16 +188,16 @@ public class OrderService(
                 ItemHeight   : row.Cell(20).GetValue<double>(),
                 RowNumber    : row.RowNumber()))
             .ToList();
-
+ 
         if (!rows.Any())
             throw new BadRequestException("File không có dữ liệu");
-
-        // ── Gom lookup ra ngoài loop ──────────────
+ 
+        // Batch lookup (giữ nguyên — đã đúng)
         var serviceNames = rows.Select(r => r.ServiceName).Distinct().ToList();
         var services = await serviceRepository.Query()
             .Where(s => serviceNames.Contains(s.Name))
             .ToDictionaryAsync(s => s.Name, ct);
-
+ 
         var provinceNames = rows
             .SelectMany(r => new[] { r.FromProvince, r.ToProvince })
             .Distinct()
@@ -207,14 +205,14 @@ public class OrderService(
         var provinces = await provinceRepository.Query()
             .Where(p => provinceNames.Contains(p.Name))
             .ToDictionaryAsync(p => p.Name, ct);
-
+ 
         var groups = rows
             .GroupBy(r => new { r.FromPhone, r.ToPhone, r.ServiceName })
             .ToList();
-
+ 
         var results = new List<OrderDto>();
         var errors  = new List<BatchErrorDto>();
-
+ 
         foreach (var group in groups)
         {
             var first = group.First();
@@ -222,25 +220,26 @@ public class OrderService(
             {
                 if (!services.TryGetValue(first.ServiceName, out var service))
                     throw new BadRequestException($"Dịch vụ '{first.ServiceName}' không tồn tại");
-
+ 
                 if (!provinces.TryGetValue(first.FromProvince, out var fromProvince))
                     throw new BadRequestException($"Tỉnh '{first.FromProvince}' không tồn tại");
-
+ 
                 if (!provinces.TryGetValue(first.ToProvince, out var toProvince))
                     throw new BadRequestException($"Tỉnh '{first.ToProvince}' không tồn tại");
-
+ 
                 var fromAddress = new AddressRaw(
                     first.FromName, first.FromPhone,
                     fromProvince.Code, first.FromDistrict,
-                    first.FromWard, first.FromStreet);
-
+                    first.FromWard,    first.FromStreet);
+ 
                 var toAddress = new AddressRaw(
                     first.ToName, first.ToPhone,
                     toProvince.Code, first.ToDistrict,
-                    first.ToWard, first.ToStreet);
-
+                    first.ToWard,    first.ToStreet);
+ 
                 var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
-                var items     = group.Select(i => new Item
+ 
+                var items = group.Select(i => new Item
                 {
                     Id       = Guid.NewGuid(),
                     Image    = i.ItemImage,
@@ -251,23 +250,24 @@ public class OrderService(
                     Width    = i.ItemWidth,
                     Height   = i.ItemHeight,
                 }).ToList();
-
+ 
                 var weight = weightService.Calculate(items);
                 var price  = await pricingService.CalculateAsync(
                     service.Id, fromAddress, toAddress, weight, null, ct);
-                var code   = await GenerateUniqueCodeAsync(ct);
-
-                var order = await CreateOrderCoreAsync(
-                    code,
-                    userId,
+ 
+                var fromSnapshot = AddressSnapshot.From(fromAddress);
+                var toSnapshot   = AddressSnapshot.From(toAddress);
+ 
+                var order = await CreateCoreAsync(
+                    fromSnapshot,
+                    toSnapshot,
                     service.Id,
                     warehouse.Id,
-                    AddressSnapshot.From(fromAddress),
-                    AddressSnapshot.From(toAddress),
                     price,
+                    userId,
                     items,
                     ct);
-
+ 
                 results.Add(order);
             }
             catch (Exception ex)
@@ -275,55 +275,52 @@ public class OrderService(
                 errors.Add(new BatchErrorDto(
                     group.Select(r => r.RowNumber).ToList(),
                     ex.Message));
-
+ 
                 logger.LogWarning(
                     "CreateListAsync row error. Rows={Rows} Error={Error}",
                     string.Join(",", group.Select(r => r.RowNumber)),
                     ex.Message);
             }
         }
-
+ 
         return new OrderListDto(results, errors);
     }
 
-    // ─────────────────────────────────────────────
-    // UPDATE
-    // ─────────────────────────────────────────────
-    public async Task UpdateAsync(
-        UpdateOrderDto dto,
+   public async Task<OrderDto> UpdateAsync(
         Guid orderId,
+        UpdateOrderDto dto,
         Guid userId,
         CancellationToken ct)
     {
-        var addresses = await addressRepository.Query()
+        var addresses = await addressRepository
+            .Query()
             .Where(a => a.Id == dto.FromAddressId || a.Id == dto.ToAddressId)
             .ToListAsync(ct);
-
+ 
         var fromAddress = addresses.FirstOrDefault(a => a.Id == dto.FromAddressId)
             ?? throw new NotFoundException("From address", dto.FromAddressId);
-
+ 
         var toAddress = addresses.FirstOrDefault(a => a.Id == dto.ToAddressId)
             ?? throw new NotFoundException("To address", dto.ToAddressId);
-
+ 
         var weight = weightService.Calculate(dto.Items);
         var price  = await pricingService.CalculateAsync(
             dto.ServiceId, fromAddress, toAddress, weight, dto.Cod, ct);
-
+ 
         await using var transaction = await orderRepository.BeginTransactionAsync(ct);
         try
         {
-            var order = await orderRepository.Query()
-                .Include(o => o.Items)
+            var order = await orderRepository
+                .Query()
                 .FirstOrDefaultAsync(o => o.Id == orderId, ct)
                 ?? throw new NotFoundException("Order", orderId);
-
+ 
             if (order.UserId != userId)
-                throw new ForbiddenException("Không có quyền cập nhật đơn hàng này");
-
+                throw new ForbiddenException("");
+ 
             if (order.Status != OrderStatus.Pending)
-                throw new InvalidOrderTransitionException(
-                    "Chỉ cập nhật được đơn ở trạng thái Pending", order.Status);
-
+                throw new InvalidOrderTransitionException("", order.Status);
+ 
             order.Update(
                 AddressSnapshot.From(fromAddress),
                 AddressSnapshot.From(toAddress),
@@ -331,28 +328,30 @@ public class OrderService(
                 price.Cost,
                 price.Fee,
                 price.Total);
-
+ 
             order.UpdateItems(dto.Items.Select(i => new ItemUpdate(
                 i.Id, i.Name, i.Quantity,
                 i.Weight, i.Length, i.Width, i.Height)).ToList());
-
+ 
+            var now = DateTime.UtcNow;
+ 
             await orderHistoryRepository.AddAsync(new OrderHistory
             {
                 Id      = Guid.NewGuid(),
                 OrderId = orderId,
                 UserId  = userId,
                 Note    = "Đã cập nhật đơn hàng",
-                Date    = DateTime.UtcNow,
+                Date    = now,
             }, ct);
-
+ 
             await trackingRepository.AddAsync(new Tracking
             {
                 Id      = Guid.NewGuid(),
                 OrderId = orderId,
                 Message = "Đã cập nhật đơn hàng",
-                Date    = DateTime.UtcNow,
+                Date    = now,
             }, ct);
-
+ 
             await orderRepository.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
         }
@@ -364,7 +363,8 @@ public class OrderService(
                 orderId, userId);
             throw;
         }
-
+ 
+        // [P2] Publish sau transaction — tránh gửi event khi rollback
         await eventBus.Publish(new OrderUpdatedEvent(orderId, userId));
     }
 
@@ -466,38 +466,26 @@ public class OrderService(
     }
 
     private async Task<OrderDto> CreateCoreAsync(
-        Address fromAddress,
-        Address toAddress,
-        Guid serviceId,
-        Guid warehouseId,
-        Price price,
-        Guid userId,
-        List<Item> items,
+        CreateContext createContext,
         CancellationToken ct)
     {
         await using var transaction = await orderRepository.BeginTransactionAsync(ct);
         try
         {
-            var order = new AddressSnapshot
+            var order = new Order
             {
                 Id = Guid.NewGuid(),
                 Code = GenerateCode(),
-                serviceId,
-                warehouseId,
-                price.Cost,
-                price.Fee,
-                price.Total,
-                userId,
-                 Items = items
-                .Select(i => new Item(
-                    i.Image,
-                    i.Name,
-                    i.Quantity,
-                    i.Weight,
-                    i.Length,
-                    i.Width,
-                    i.Height))
-                .ToList()
+                Date = DateTime.UtcNow,
+                Status = OrderStatus.PENDING,
+                Cod = cod,
+                Cost = cost,
+                Fee = Fee,
+                Total = total,
+                ServiceId = serviceId,
+                WarehouseId = warehouseId,
+                UserId = userId,
+                Items = items
             }
 
             await orderRepository.AddAsync(order, ct);
@@ -508,8 +496,8 @@ public class OrderService(
                 Name = fromAddress.Name,
                 Phone = fromAddress.Phone,
                 Street = fromAddress.Street,
-                Ward = fromAddress.Ward,
-                City = fromAddress.City,
+                WardId = fromAddress.WardId,
+                CityId = fromAddress.CityId,
                 OrderId = order.Id,
             }, ct);
 
@@ -519,8 +507,8 @@ public class OrderService(
                 Name = toAddress.Name,
                 Phone = toAddress.Phone,
                 Street = toAddress.Street,
-                Ward = toAddress.Ward,
-                City = toAddress.City,
+                WardId = toAddress.WardId,
+                CityId = toAddress.CityId,
                 OrderId = order.Id,
             }, ct);
 

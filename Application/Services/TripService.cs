@@ -14,33 +14,72 @@ public class TripService : ITripService
         _priceService = priceService;
     }
 
-    public async Task<Guid> CreateAsync(
+   public async Task<Guid> CreateAsync(
         CreateTripDto dto,
         CancellationToken ct)
     {
-        var orders = await orderRepository
-            .Query()
-            .Where(o => dto.OrderIds.Contains(o.Id))
-            .ToListAsync(ct);   
+        var orders = await orderRepository.Query()
+            .Where(x => dto.OrderIds.Contains(x.Id)).ToListAsync(ct);
 
-        if (!orders.Any())
-            throw new Exception("Orders not found.");
+        if (orders.Count != dto.OrderIds.Count)
+            throw new BadRequestException(
+                "Some orders not found.");
 
-        await tripRepository.AddAsync(new Trip
+        if (orders.Any(x => x.TripId != null))
+            throw new BadRequestException(
+                "Some orders already assigned.");
+
+        switch (dto.Type)
         {
-            Id        = Guid.NewGuid(),
-            Code      = GenerateCode(),
-            Type      = dto.Type,
-            Status    = TripStatus.PREPARED,
-            Date      = DateTime.UtcNow,
-            FromId    = dto.FromId,
-            ToId      = dto.ToId,
-            DriverId  = dto.DriverId,
-            VehicleId = dto.VehicleId,
-            Orders    = orders,
-        }, ct);
+            case TripType.Pickup:
+                ValidatePickup(dto);
+                break;
 
-        return trip.Id;
+            case TripType.Delivery:
+                ValidateDelivery(dto);
+                break;
+
+            case TripType.Transfer:
+                ValidateTransfer(dto);
+                break;
+        }
+
+        var trip = new Trip
+        {
+            Id = Guid.NewGuid(),
+            Code = GenerateCode(),
+            Type = dto.Type,
+            Status = TripStatus.Prepared,
+            Date = DateTime.UtcNow,
+            FromId = dto.FromId,
+            ToId = dto.ToId,
+            DriverId = dto.DriverId,
+            VehicleId = dto.VehicleId,
+            Orders = orders
+        };
+
+        if (dto.Type != TripType.Transfer)
+        {
+            trip.Stops = dto.Stops
+                .OrderBy(x => x.Sequence)
+                .Select(x => new TripStop
+                {
+                    Id = Guid.NewGuid(),
+                    TripId = tripId,
+                    Sequence = x.Sequence,
+                    LocationId = x.LocationId
+                })
+                .ToList();
+        }
+
+        foreach (var order in orders)
+        {
+            order.TripId = tripId;
+        }
+
+        await tripRepository.AddAsync(trip, ct);
+
+        return tripId;
     }
 
     public async Task Assign(Guid tripId, AssignDriverDTO dto)
