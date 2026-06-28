@@ -1,16 +1,16 @@
 public class Address
 {
-    private Guid Id { get; private set; }
-    private Guid UserId { get; private set; }
-    private string Name { get; private set; }
-    private string Phone { get; private set; }
-    private string Street { get; private set; }
-    private Guid WardId { get; private set; }
-    private Guid CityId { get; private set; }
-    private double Latitude { get; private set; }
-    private double Longitude { get; private set; }
-    private bool IsDefault { get; private set; }
-    private bool IsActive { get; private set; }
+    public Guid Id { get; private set; }
+    public string Name { get; private set; }
+    public string Phone { get; private set; }
+    public string Street { get; private set; }
+    public Guid CityId { get; private set; }
+    public Guid WardId { get; private set; }
+    public double Latitude { get; private set; }
+    public double Longitude { get; private set; }
+    public bool IsDefault { get; private set; }
+    public bool IsActive { get; private set; }
+    public Guid UserId { get; private set; }
 
     public static Address Create(
         Guid userId,

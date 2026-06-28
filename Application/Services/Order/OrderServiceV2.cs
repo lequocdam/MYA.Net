@@ -8,147 +8,79 @@ public class OrderService(
     IWarehouseService         warehouseService,
     IPricingService           pricingService,
     IWeightService            weightService,
+    // Specs
     IOrderPermissionSpecification orderPermissionSpec,
-    IOrderFilterSpecification     orderFilterSpec,
+    IFilterOrderSpec filterOrderSpec,
     IEventBus             eventBus,
     ILogger<OrderService> logger
 ) : IOrderService
 {
     public async Task<OrderPageDto> GetAllAsync(
-        OrderFilterDto filter,
-        Guid userId,
-        string role,
-        Guid? warehouseId,
+        FilterOrderDto filter,
+        CurrentUser currentUser,
         CancellationToken ct)
     {
-        var query = orderRepository.Query()
-            .AsNoTracking();
-
-        query = orderPermissionSpec.Apply(
-            query,
-            userId,
-            role,
-            warehouseId);
-
-        query = orderFilterSpec.Apply(
-            query,
-            filter);
-
-        var total = await query.CountAsync(ct);
-
-        var orders = await query
-            .OrderByDescending(x => x.Date)
-            .Skip((filter.Page - 1) * filter.PageSize)
-            .Take(filter.PageSize)
-            .Select(x => new OrderDto(
-                x.Id,
-                x.Code,
-                o.Status,
-                o.Date,
-                o.ServiceId,
-                o.WarehouseId
-                o.UserId,
-                o.Total))
-            .ToListAsync(ct);
-
-        return new OrderPageDto(
-            filter.Page,
-            filter.PageSize,
-            total,
-            orders);
+        return await orderRepository.GetPagesAsync(
+            filter, 
+            currentUser,
+            ct);
     }
 
-    // ─────────────────────────────────────────────
-    // GET DETAIL
-    // ─────────────────────────────────────────────
-    public async Task<OrderDetailDto> GetDetailAsync(
+    public async Task<OrderDetailDto> GetByIdAsync(
         Guid orderId,
-        Guid userId,
-        string role,    
-        Guid? warehouseId,
+        CurrentUser user,
         CancellationToken ct)
     {
-        var order = await orderRepository.Query()
-            .AsNoTracking()
-            .FirstOrDefaultAsync(o => o.Id == orderId, ct)
+         var order = await orderRepository.GetByIdlAsync(orderId, user, ct)
             ?? throw new NotFoundException("Order", orderId);
 
-        var allowed = role switch
+        if (!orderPermissionSpec.CanAccess(order, currentUser))
         {
-            "Admin"  => true,
-            "Staff"  => order.WarehouseId == warehouseId,
-            _        => order.UserId == userId
-        };
+            throw new ForbiddenException("Order", orderId);
+        }
 
-        if (!allowed)
-            throw new ForbiddenException("Không có quyền xem đơn hàng này");
-
-        return new OrderDetailDto(
-            order.Id,
-            order.Code,
-            order.Date,
-            new AddressDto(
-                order.FromAddressSnapshot.Name,
-                order.FromAddressSnapshot.Phone,
-                order.FromAddressSnapshot.Province,
-                order.FromAddressSnapshot.District,
-                order.FromAddressSnapshot.Ward,
-                order.FromAddressSnapshot.Street),
-            new AddressDto(
-                order.ToAddressSnapshot.Name,
-                order.ToAddressSnapshot.Phone,
-                order.ToAddressSnapshot.Province,
-                order.ToAddressSnapshot.District,
-                order.ToAddressSnapshot.Ward,
-                order.ToAddressSnapshot.Street),
-            order.Cost,
-            order.Fee,
-            order.CodAmount,
-            order.Total,
-            order.Status,
-            order.Items.Select(i => new ItemDto(
-                i.Image,
-                i.Name,
-                i.Quantity,
-                i.Weight,
-                i.Length,
-                i.Width,
-                i.Height)).ToList());
+        return order;
     }
 
+    // FIX 5: Extract helper tránh lặp code AddressDto mapping
+    private static AddressDto MapAddress(AddressSnapshot s) => new(
+        s.Name,
+        s.Phone,
+        s.Province,
+        s.District,
+        s.Ward,
+        s.Street);
+
     public async Task<OrderDto> CreateAsync(
-        CreateDto dto,
         Guid userId,
+        CreateOrderDto dto,
         CancellationToken ct)
     {
-        var fromAddress = addressRepository.GetById(dto.FromAddressId);
-        var toAddress = addressRepository.GetById(dto.ToAddressId);
+        var fromAddress = await addressRepo.GetByIdAsync(dto.FromAddressId);
+        var toAddress = await addressRepo.GetByIdAsync(dto.ToAddressId);
+
+        var warehouse = await warehouseRepo.GetByAddressAsync(fromAddress, ct);
 
         var items = mapper.Map(dto.Items);
-
-        var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
 
         var quote = await quoteService.GetAsync(
             dto.ServiceId,
             fromAddress,
             toAddress,
-            dto.Cod,
             items,
+            dto.Cod,
             ct);
 
         var createContext = new CreateContext(
-            dto.ServiceId,
-            userId,
             warehouse.Id,
             fromAddress,
             toAddress,
-            dto.Cod,
             quote,
-            items);
+            dto.ServiceId,
+            items,
+            userId);
 
-        return await CreateCoreAsync(
-            createContext,
-            ct);
+        return await CreateCoreAsync(createContext, ct);
     }
 
     public async Task<OrderListDto> CreateListAsync(
@@ -472,64 +404,36 @@ public class OrderService(
         await using var transaction = await orderRepository.BeginTransactionAsync(ct);
         try
         {
-            var order = new Order
-            {
-                Id = Guid.NewGuid(),
-                Code = GenerateCode(),
-                Date = DateTime.UtcNow,
-                Status = OrderStatus.PENDING,
-                Cod = cod,
-                Cost = cost,
-                Fee = Fee,
-                Total = total,
-                ServiceId = serviceId,
-                WarehouseId = warehouseId,
-                UserId = userId,
-                Items = items
-            }
+            var order = Order.Create(
+                createContext.Quote,
+                createContext.ServiceId,
+                createContext.Items,
+                createContext.UserId,
+                createContext.WarehouseId,
+            )
 
             await orderRepository.AddAsync(order, ct);
 
-            await addressSnapshotRepository.AddAsync(new AddressSnapshot
-            {
-                Id = Guid.NewGuid(),
-                Name = fromAddress.Name,
-                Phone = fromAddress.Phone,
-                Street = fromAddress.Street,
-                WardId = fromAddress.WardId,
-                CityId = fromAddress.CityId,
-                OrderId = order.Id,
-            }, ct);
+            var fromAddressSnap = AddressSnapshot.Create(order.Id, createContext.FromAddress);
+            var toAddressSnap = AddressSnapshot.Create(order.Id, createContext.ToAddress);
 
-            await addressSnapshotRepository.AddAsync(new AddressSnapshot
-            {
-                Id = Guid.NewGuid(),
-                Name = toAddress.Name,
-                Phone = toAddress.Phone,
-                Street = toAddress.Street,
-                WardId = toAddress.WardId,
-                CityId = toAddress.CityId,
-                OrderId = order.Id,
-            }, ct);
+            await addressSnapshotRepository.AddAsync(fromAddressSnap, ct);
+            await addressSnapshotRepository.AddAsync(toAddressSnap, ct);
 
-            await historyRepository.AddAsync(new History
-            {
-                Id = Guid.NewGuid(),
-                Date = DateTime.UtcNow,
-                OrderId = order.Id,
-                Status = order.Status,
-                Note = "",
-                UserId = userId,
-            }, ct);
+            var orderHistory = OrderHistory.Create(
+                order.Status,
+                order.UserId,
+                order.Id
+            )
 
-            await trackingRepository.AddAsync(new Tracking
-            {
-                Id = Guid.NewGuid(),
-                Date = DateTime.UtcNow,
-                OrderId = order.Id,
-                Status = order.Status,
-                Message = GetTrackingMessage(OrderStatus.Pending),
-            }, ct);
+            await orderHistoryRepository.AddAsync(orderHistory, ct);
+
+            var tracking = Tracking.Create(
+                order.Status,
+                order.Id
+            )
+            
+            await trackingRepository.AddAsync(tracking, ct);
 
             await orderRepository.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
@@ -658,22 +562,4 @@ public class OrderService(
 
     private static string GenerateCode() =>
         $"ORD-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}";
-
-    private static string GetTrackingMessage(OrderStatus status) => status switch
-    {
-        OrderStatus.Pending         => "Đơn hàng đang chờ xác nhận",
-        OrderStatus.Confirmed       => "Đơn hàng đã được xác nhận",
-        OrderStatus.PickingUp       => "Đang lấy hàng từ người gửi",
-        OrderStatus.PickedUp        => "Đã lấy hàng thành công",
-        OrderStatus.Transiting      => "Hàng đang trên đường trung chuyển",
-        OrderStatus.Arrived         => "Hàng đã về kho đích",
-        OrderStatus.Delivering      => "Đơn hàng đang trên đường giao đến bạn",
-        OrderStatus.Completed       => "Giao hàng thành công",
-        OrderStatus.Failed          => "Giao hàng thất bại",
-        OrderStatus.ReturnRequested => "Đang xử lý yêu cầu hoàn hàng",
-        OrderStatus.Returning       => "Hàng đang được hoàn về người gửi",
-        OrderStatus.Returned        => "Hoàn hàng thành công",
-        OrderStatus.Cancelled       => "Đơn hàng đã bị hủy",
-        _                           => status.ToString()
-    };
 }

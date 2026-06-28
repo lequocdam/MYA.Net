@@ -1,7 +1,7 @@
 public class QuoteService(
     IZoneService zoneService,
     IWeightService weightService,
-    IPricingService pricingService) : IShippingQuoteService
+    IPricingService pricingService) : IQuoteService
 {
     public async Task<Quote> GetAsync(
         Guid serviceId,
@@ -12,19 +12,13 @@ public class QuoteService(
         CancellationToken ct)
     {
         var zone = await zoneService.GetAsync(fromAddress, toAddress, ct);
-        var weight = weightService.Calculate(items);
-        var price = await pricingService.GetAsync(
-            serviceId,
-            zone.Id,
-            weight,
-            cod,
-            ct);
+        var weight = await weightService.Calculate(items);
+        var price = await pricingService.GetAsync(serviceId, zone.Id, weight, cod, ct);
 
         return new Quote(
-            zone.Id,
+            ServiceId
+            zoneId,
             weight,
-            price.Cost,
-            price.Fee,
-            price.Total);
+            price);
     }
 }

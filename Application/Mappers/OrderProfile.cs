@@ -15,5 +15,5 @@ public class OrderProfile : Profile
             .ForMember(
                 dest => dest.Id,
                 opt => opt.MapFrom(_ => Guid.NewGuid()));
-            }
+    }
 }

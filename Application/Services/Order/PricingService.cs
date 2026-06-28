@@ -2,15 +2,14 @@ public class PricingService(
     IPricingRepository pricingRepository,
     IPriceEngine priceEngine) : IPricingService
 {
-    public async Task<PriceResult> CalculateAsync(
+    public async Task<Price> GetAsync(
         Guid serviceId,
         Guid zoneId
         decimal weight,
         decimal cod,
         CancellationToken ct)
     {
-        var pricing = await pricingRepository
-            .Query()
+        var pricing = await pricingRepository.Query()
             .Where(p => p.ServiceId == serviceId && p.Zone == zoneId)
             .Select(p => new Pricing(
                 p.Id,
@@ -21,8 +20,6 @@ public class PricingService(
             .FirstOrDefaultAsync(ct)
             ?? throw new NotFoundException("Pricing not found");
 
-        var price = priceEngine.Calculate(pricing, weight, cod);
-
-        return price;
+        return priceEngine.Calculate(pricing, weight, cod);
     }
 }

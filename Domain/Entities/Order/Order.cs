@@ -1,17 +1,44 @@
 public class Order
 {
-    public Guid Id { get; set; }
-    public string Code { get; set; }
-    public DateTime Date { get; set; }
-    public OrderStatus Status { get; set; }
-    public decimal? Cod { get; set; }
-    public decimal Cost { get; set; }
-    public decimal Fee { get; set; }
-    public decimal Total { get; set; }
-    public Guid ServiceId { get; set; }
-    public Guid UserId { get; set; }
-    public Guid WarehouseId { get; set; }
-    public List<Item> Items { get; set; } = new();
+    public Guid Id { get; private set; }
+    public Guid UserId { get; private set; }
+    public Guid WarehouseId { get; private set; }
+    public string Code { get; private set; }
+    public Guid ServiceId { get; private set; }
+    public Guid FromAddressId { get; private set; }
+    public Guid ToAddressId { get; private set; }
+    public DateTime Date { get; private set; }
+    public OrderStatus Status { get; private set; }
+    public decimal Cost { get; private set; }
+    public decimal Fee { get; private set; }
+    public decimal Cod { get; private set; }
+    public decimal Total { get; private set; }
+    public List<Item> Items { get; private set; }
+
+    public static Order Create(
+        Guid serviceId,
+        Guid userId,
+        Guid warehouseId,
+        Quote quote,
+        List<Item> items)
+    {
+        return new Order
+        {
+            Id = Guid.NewGuid(),
+            Code = GenerateCode(),
+            Date = DateTime.UtcNow,
+            Status = OrderStatus.PENDING,
+            Cost = quote.Cost,
+            Fee = quote.Fee,
+            Cod = quote.Cod,
+            Total = quote.Total,
+            ServiceId = serviceId,
+            FromAddressId
+            Items = items,
+            UserId = userId,
+            WarehouseId = warehouseId,
+        };
+    }
 
     public void Update(
         Guid fromAddressId,
