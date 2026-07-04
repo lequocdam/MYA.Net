@@ -5,15 +5,17 @@ public class QuoteService(
 {
     public async Task<Quote> GetAsync(
         Guid serviceId,
-        Address fromAddress,
-        Address toAddress,
+        Area fromArea,
+        Area toArea,
         decimal cod,
         List<Item> items,
         CancellationToken ct)
     {
-        var zone = await zoneService.GetAsync(fromAddress, toAddress, ct);
+        var zone = await zoneService.GetAsync(fromArea, toArea, ct);
         var weight = await weightService.Calculate(items);
-        var price = await pricingService.GetAsync(serviceId, zone.Id, weight, cod, ct);
+        var cost = await costService.GetAsync(serviceId, zone.Id, ct);
+        var fee = await feeService.GetAsync(weight, cod, ct);
+        var cod = await codService.GetAsync(cod, ct);
 
         return new Quote(
             ServiceId

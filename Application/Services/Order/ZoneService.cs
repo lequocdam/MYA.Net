@@ -1,28 +1,12 @@
 public class ZoneService(
     ICityRepository cityRepository,
-    IWardRepository wardRepository,
     ICityOverrideRepository cityOverrideRepository): IZoneService
 {
 
-    public async Task<Zones> GetAsync(
-        Address fromAddress, 
-        Address toAddress)
+    public async Task<Zones> GetAsync(Area fromArea, Area toArea)
     {
-        var cities = await cityRepository.Query()
-            .Where(c => c.Id == fromAddress.Id || c.Id == toAddress.Id)
-            .Select(a => new City(
-                a.Id,
-                a.WardId,
-                a.CityId,
-                a.Latitude,
-                a.Longitude))
-            .ToListAsync(ct);
-
-        var fromWard = await wardRepository.FirstOrDefault(w => w.Id == fromAddress.WardId)
-            ?? throw new NotFoundException("From ward not found");
-
-        var toWard = await wardRepository.FirstOrDefault(w => w.Id == toAddress.WardId)
-            ?? throw new NotFoundException("To ward not found");
+        var fromCity = await cityRepo.GetByIdAsync(fromArea.CityId);
+        var toCity = await cityRepo.GetByIdAsync(fromArea.CityId);
 
         if (fromCity.IsRestricted)
             return ?? throw new BusinessException("From city is restricted");

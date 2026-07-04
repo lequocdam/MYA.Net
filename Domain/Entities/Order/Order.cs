@@ -3,41 +3,37 @@ public class Order
     public Guid Id { get; private set; }
     public Guid UserId { get; private set; }
     public Guid WarehouseId { get; private set; }
-    public string Code { get; private set; }
     public Guid ServiceId { get; private set; }
-    public Guid FromAddressId { get; private set; }
-    public Guid ToAddressId { get; private set; }
-    public DateTime Date { get; private set; }
+    public string Code { get; private set; };
     public OrderStatus Status { get; private set; }
+    public DateTime Date { get; private set; }
     public decimal Cost { get; private set; }
     public decimal Fee { get; private set; }
     public decimal Cod { get; private set; }
     public decimal Total { get; private set; }
     public List<Item> Items { get; private set; }
 
-    public static Order Create(
-        Guid serviceId,
-        Guid userId,
-        Guid warehouseId,
-        Quote quote,
-        List<Item> items)
+    public static OrderEntity CreateOrder(Order order)
     {
-        return new Order
+        var orderEntity = new OrderEntity
         {
             Id = Guid.NewGuid(),
+            UserId = order.UserId,
+            WarehouseId = order.WarehouseId,
+            ServiceId = order.ServiceId,
             Code = GenerateCode(),
-            Date = DateTime.UtcNow,
             Status = OrderStatus.PENDING,
-            Cost = quote.Cost,
-            Fee = quote.Fee,
-            Cod = quote.Cod,
-            Total = quote.Total,
-            ServiceId = serviceId,
-            FromAddressId
-            Items = items,
-            UserId = userId,
-            WarehouseId = warehouseId,
+            Date = DateTime.UtcNow,
+            Cost = order.Quote.Cost,
+            Fee = order.Quote.Fee,
+            Cod = order.Quote.Cod,
+            Total = order.Quote.Total,
+            Items = order.Items
+            .Select(Item.Create)
+            .ToList()
         };
+
+        return orderEntity;
     }
 
     public void Update(

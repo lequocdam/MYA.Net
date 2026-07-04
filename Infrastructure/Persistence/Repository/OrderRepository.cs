@@ -1,71 +1,33 @@
-public sealed class UserRepository(AppDbContext db) : IUserRepository
+public sealed class OrderRepository(AppDbContext db) : IOrderRepository
 {
-    public IQueryable<Order> Query()
-    {
-        return db.Orders
-            .AsQueryable();
-            .AsNoTracking();
-    }
+    public IQueryable<Order> Query() => db.Orders.AsQueryable();
 
-    public async Task<User> FirstOrDefaultAsync(Guid userId,
+    public async Task<Order?> FirstOrDefaultAsync(
+        ISpecification<Order> spec, CancellationToken ct = default)
+        => await ApplySpecification(spec).FirstOrDefaultAsync(ct);
+
+    public async Task<List<Order>> ToListAsync(
+        ISpecification<Order> spec,
         CancellationToken ct = default)
-    {
-        return await db.Users.FirstOrDefaultAsync(u => u.Id == userId);
-    }
+        => await ApplySpecification(spec).ToListAsync(ct);
 
-    public async Task AddAsync(User user, CancellationToken ct = default)
-    {
-        await db.Users.AddAsync(user, ct);
-    }
+    public async Task<int> CountAsync(
+        ISpecification<Order> spec, CancellationToken ct = default)
+        => await ApplySpecification(spec).CountAsync(ct);
 
-    public Task SaveChangesAsync(CancellationToken ct = default)
-        => db.SaveChangesAsync(ct);
+    public async Task AddAsync(Order order, CancellationToken ct = default)
+        => await db.Orders.AddAsync(order, ct);
 
-    public async Task<OrderPageDto> GetPageAsync(
-        FilterOrderDto filter,
-        CurrentUser currentUser,
-        CancellationToken ct)
-    {
-        var query = db.Orders.AsNoTracking();
+    public void Update(Order order) => db.Orders.Update(order);
 
-        query = orderPermissionSpec.Apply(query, currentUser);
+    public void Remove(Order order) => db.Orders.Remove(order);
 
-        query = orderFilterSpec.Apply(query, filter);
+    public async Task<int> SaveChangesAsync(CancellationToken ct = default)
+        => await db.SaveChangesAsync(ct);
 
-        var total = await query.CountAsync(ct);
+    public async Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken ct = default)
+        => await db.Database.BeginTransactionAsync(ct);
 
-        var orders = await query
-            .OrderByDescending(x => x.Date)
-            .Skip((filter.Page - 1) * filter.PageSize)
-            .Take(filter.PageSize)
-            .Select(x => new OrderDto(
-                x.Id,
-                x.UserId,
-                x.WarehouseId,
-                x.ServiceId,
-                x.Code,
-                x.Date,
-                x.Status,
-                x.Total))
-            .ToListAsync(ct);
-
-        return new OrderPageDto(
-            filter.Page,
-            filter.PageSize,
-            total,
-            orders);
-    }
-
-    public async Task<OrderByIdDto?> GetByIdlAsync(
-        Guid orderId,
-        CurrentUser user,
-        CancellationToken ct)
-    {
-        return await db.Orders
-        .AsNoTracking()
-        .Include(x => x.FromAddressSnapshot)
-        .Include(x => x.ToAddressSnapshot)
-        .Include(x => x.Items)
-        .FirstOrDefaultAsync(x => x.Id == orderId, ct);
-    }
+    private IQueryable<Order> ApplySpecification(ISpecification<Order> spec)
+        => SpecificationEvaluator.Default.GetQuery(db.Orders.AsQueryable(), spec);
 }

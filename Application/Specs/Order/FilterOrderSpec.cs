@@ -1,25 +1,28 @@
-public sealed class FilterOrderSpec : IFilterOrderSpec
+public sealed class OrderFilterSpecification : IOrderFilterSpecification
 {
     public IQueryable<Order> Apply(
         IQueryable<Order> query,
         OrderFilterDto filter)
     {
+        ArgumentNullException.ThrowIfNull(filter);
+
         if (filter.WarehouseId.HasValue)
         {
             query = query.Where(x =>
-                x.WarehouseId == filter.WarehouseId);
+                x.WarehouseId == filter.WarehouseId.Value);
         }
 
         if (filter.ServiceId.HasValue)
         {
             query = query.Where(x =>
-                x.ServiceId == filter.ServiceId);
+                x.ServiceId == filter.ServiceId.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Code))
         {
+            var code = filter.Code.Trim();
             query = query.Where(x =>
-                x.Code.Contains(filter.Code));
+                EF.Functions.Like(x.Code, $"%{code}%"));
         }
 
         if (filter.Status.HasValue)
@@ -30,16 +33,17 @@ public sealed class FilterOrderSpec : IFilterOrderSpec
 
         if (filter.FromDate.HasValue)
         {
-            query = query.Where(x =>
-                x.Date >= filter.FromDate.Value);
+            var from = filter.FromDate.Value.Date;
+            query = query.Where(x => x.Date >= from);
         }
 
         if (filter.ToDate.HasValue)
         {
-            query = query.Where(x =>
-                x.Date <= filter.ToDate.Value);
+            // Bao trọn hết ngày ToDate (đến 23:59:59.999)
+            var to = filter.ToDate.Value.Date.AddDays(1);
+            query = query.Where(x => x.Date < to);
         }
 
-        return query;
+        return query.OrderByDescending(x => x.Date);
     }
 }

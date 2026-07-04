@@ -18,8 +18,7 @@ public class TripService : ITripService
         CreateTripDto dto,
         CancellationToken ct)
     {
-        var orders = await orderRepository.Query()
-            .Where(x => dto.OrderIds.Contains(x.Id)).ToListAsync(ct);
+        var orders = await orderRepository.FindOrdersById(dto.OrderIds, ct)
 
         if (orders.Count != dto.OrderIds.Count)
             throw new BadRequestException(

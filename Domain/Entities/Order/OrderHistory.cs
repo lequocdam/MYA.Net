@@ -16,10 +16,16 @@ public class OrderHistory
         {
             Id = Guid.NewGuid(),
             Date = DateTime.UtcNow,
-            Note = "",
+            Note = GetNote(status),
             Status = status,
             UserId = userId,
             OrderId = orderId,
         };
+    }
+
+    private static string GetNote(OrderStatus status) => status switch
+    {
+        OrderStatus.Confirmed => "Đơn hàng đã được xác nhận",
+        OrderStatus.Cancelled => "Đơn hàng đã bị hủy"
     }
 }
