@@ -1,9 +1,11 @@
-public class Order
+public class OrderEntity
 {
     public Guid Id { get; private set; }
     public Guid UserId { get; private set; }
     public Guid WarehouseId { get; private set; }
     public Guid ServiceId { get; private set; }
+    public Guid FromAddressId { get; private set; }
+    public Guid ToAddressId { get; private set; }
     public string Code { get; private set; };
     public OrderStatus Status { get; private set; }
     public DateTime Date { get; private set; }
@@ -15,12 +17,14 @@ public class Order
 
     public static OrderEntity CreateOrder(Order order)
     {
-        var orderEntity = new OrderEntity
+        return new OrderEntity
         {
             Id = Guid.NewGuid(),
             UserId = order.UserId,
             WarehouseId = order.WarehouseId,
             ServiceId = order.ServiceId,
+            FromAddressId = order.FromAddressId,
+            ToAddressId = order.ToAddressId,
             Code = GenerateCode(),
             Status = OrderStatus.PENDING,
             Date = DateTime.UtcNow,
@@ -33,7 +37,6 @@ public class Order
             .ToList()
         };
 
-        return orderEntity;
     }
 
     public void Update(

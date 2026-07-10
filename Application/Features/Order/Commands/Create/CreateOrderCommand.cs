@@ -6,5 +6,6 @@ public sealed record CreateOrderCommand(
     Guid ServiceId,
     Guid FromAddressId,
     Guid ToAddressId,
-    bool? Cod,
+    decimal CodAmount,
+    string? Note,
     List<CreateItemCommand> Items) : IRequest<Guid>;

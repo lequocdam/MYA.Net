@@ -4,12 +4,11 @@ public class AddressProfile : Profile
 {
     public AddressProfile()
     {
-        CreateMap<Address, AddressDto>();
-        
+        CreateMap<UpdateCommand, UpdateRequest>();
 
-        CreateMap<AddressDto, Address>();
+        CreateMap<Address, CreateCommand>();
 
-        CreateMap<Item, ItemDto>();
+        CreateMap<Contact, CreateCommand>();
 
         CreateMap<CreateItemDto, Item>()
             .ForMember(

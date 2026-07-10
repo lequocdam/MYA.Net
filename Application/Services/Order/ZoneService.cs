@@ -25,4 +25,24 @@ public class ZoneService(
 
         return zone;
     }
+
+    public sealed class ZoneResolver(
+        IZoneCoverageRepository zoneCoverageRepository,
+        IZoneRepository zoneRepository) : IZoneResolver
+    {
+        public async Task<Zone> ResolveAsync(
+            Address address,
+            CancellationToken ct)
+        {
+            var zoneId = await zoneCoverageRepository.ResolveAsync(address, ct);
+
+            if (zoneId is null)
+                throw new BusinessException(
+                    "No zone configured for this address.");
+
+            return await zoneRepository.GetByIdAsync(
+                zoneId.Value,
+                ct);
+        }
+    }
 }

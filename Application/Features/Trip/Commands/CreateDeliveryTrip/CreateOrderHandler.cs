@@ -65,3 +65,26 @@ public sealed class CreateCommandHandler(
     }
 }
 
+public sealed class CreateDeliveryTripHandler(
+    IOrderRepository orderRepository,
+    IRoutingEngine routingEngine,
+    ITripFactory tripFactory,
+    ITripRepository tripRepository
+) : IRequestHandler<CreateDeliveryTripCommand, Guid>
+{
+    public async Task<Guid> Handle(CreateDeliveryTripCommand command, CancellationToken ct)
+    {
+        var orders = await orderRepository.GetByIdsAsync(req.OrderIds, ct);
+
+        TripCreationPolicy.Validate(orders);
+
+        var route = routingEngine.Build(orders);
+
+        var trip = tripFactory.Create(orders, route);
+
+        await tripRepository.AddAsync(trip, ct);
+
+        return trip.Id;
+    }
+}
+

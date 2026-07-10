@@ -4,57 +4,30 @@ namespace MYA.Infrastructure.Services;
 
 public sealed class OrderWriteService(
     IOrderRepository orderRepository,
-    IAddressSnapshotRepository addressSnapshotRepository,
     IOrderHistoryRepository orderHistoryRepository,
     ITrackingRepository trackingRepository,
-    IOutboxRepository outboxRepository) : IOrderWriteService
+    IOutboxRepository outboxRepository,
+    IUnitOfWork unitOfWork) : IOrderWriteService
 {
     public async Task<Guid> CreateAsync(
-        Order order,
-        AddressEntity fromAddressEntity,
-        AddressEntity toAddressEntity,
+        Order order, 
         CancellationToken ct)
     {
-        await using var transaction = await orderRepository.BeginTransactionAsync(ct);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
-        var orderEntity = Order.Create(order);
+        var orderAggregate = Order.Create(order);
 
-        await orderRepository.AddAsync(orderEntity, ct);
+        await orderRepository.AddAsync(orderAggregate, ct);
 
-        await orderRepository.SaveChangesAsync(ct);
-
-        await SaveAddressSnapshotsAsync(fromAddress, toAddress);
+        await unitOfWork.SaveChangesAsync(ct);
 
         await SaveOrderHistoryAsync(order, ct);
 
         await SaveTrackingAsync(order, ct);
 
-        await PublishOrderCreatedAsync(order, ct);
-
         await transaction.CommitAsync(ct);
 
-        return orderEntity.Id;
-    }
-
-    private async Task SaveAddressSnapshotsAsync(
-        Order order,
-        AddressEntity fromAddressEntity,
-        AddressEntity toAddressEntity,
-        CancellationToken ct)
-    {
-        var fromAddress = new Address(
-            OrderId = order.Id,
-            AddressEntity = fromAddressEntity,
-        )
-
-        var toAddress = new Address(
-            OrderId = order.Id,
-            AddressEntity = toAddressEntity
-        )
-        
-        await addressSnapshotRepository.AddAsync(fromAddress, ct);
-
-        await addressSnapshotRepository.AddAsync(toAddress, ct);
+        return orderAggregate.Id;
     }
 
     private async Task SaveOrderHistoryAsync(

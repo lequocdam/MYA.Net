@@ -1,53 +1,72 @@
-    public Price Calculate(Pricing pricing, decimal weight, decimal cod)
-    {
-        var cost = CalculateCost(pricing, weight);
-        var fee = CalculateCod(pricing, cod);
-        var surcharge = CalculateSurcharge(pricing, cost)
-        var total  = cost + fee;
+using YourApp.Domain.Pricing.Entities;
+using YourApp.Domain.Pricing.ValueObjects;
 
-        return new Price
-        {
-            Cost = cost,
-            CodFee = codFee,
-            Fee = fee,
-            Total = total
-        };
+namespace YourApp.Domain.Pricing.Services;
+
+public class PricingCalculator
+{
+    public DeliveryPrice Calculate(TariffConfig tariff, decimal chargeableWeightKg, decimal codAmount)
+    {
+        // 1. Tính toán từng cấu phần chi phí độc lập
+        var baseCost = CalculateBaseCost(tariff, chargeableWeightKg);
+        var codFee = CalculateCodFee(tariff, codAmount);
+        var surchargeFee = CalculateTotalSurcharge(tariff, baseCost);
+        
+        // 2. Sửa lỗi: Tổng chi phí bắt buộc phải cộng dồn toàn bộ các cấu phần
+        var totalPrice = baseCost + codFee + surchargeFee;
+
+        return new DeliveryPrice(
+            BaseCost: baseCost,
+            CodFee: codFee,
+            SurchargeFee: surchargeFee,
+            TotalPrice: totalPrice
+        );
     }
 
-    private static decimal CalculateCost(decimal weight, Pricing pricing)
+    private static decimal CalculateCost(TariffConfig tariff, decimal chargeableWeightKg)
     {
-        if (weight <= pricing.FirstWeight)
-            return pricing.FirstCost;
+        if (chargeableWeightKg <= tariff.FirstWeightKg)
+            return tariff.FirstCost;
 
-        var extraWeight = weight - pricing.BaseWeight;
-        var extraSteps  = Math.Ceiling(extraWeight / pricing.Step);
+        var extraWeightKg = chargeableWeightKg - tariff.BaseWeightKg;
+        if (extraWeightKg <= 0) return tariff.BaseCost;
 
-        return pricing.BaseCost + (extraSteps * pricing.ExtraCost);
+        var extraSteps = Math.Ceiling(extraWeightKg / tariff.WeightStepKg);
+
+        return tariff.BaseCost + (extraSteps * tariff.ExtraStepCost);
     }
 
-    private static decimal CalculateCod( Pricing pricing, decimal cod)
+    // Thuật toán tính phí thu hộ COD dựa trên tỷ lệ phần trăm hoặc mức sàn tối thiểu
+    private static decimal CalculateCodFee(TariffConfig tariff, decimal codAmount)
     {
-        if (cod == 0) return 0;
-        var fee = Math.Max((cod * pricing.CodRate;), pricing.MinCod);
-
-        return fee;
+        if (codAmount <= 0) return 0m;
+        
+        // Trong thực tế, CodRate thường cấu hình dạng phần trăm (Ví dụ: 0.5% hoặc 1%)
+        // Do đó bắt buộc phải chia cho 100 để ra tỷ lệ thập phân chính xác
+        var calculatedFee = (codAmount * tariff.CodRatePercentage) / 100m; 
+        
+        // Hãng vận chuyển luôn lấy con số lớn hơn giữa tỷ lệ % và mức phí sàn tối thiểu
+        return Math.Max(calculatedFee, tariff.MinCodFee);
     }
 
-    private static decimal CalculateSurcharge(
-        Pricing pricing,
-        decimal shippingCost)
+    // Thuật toán duyệt danh sách phụ phí (Phí nhiên liệu, phí vùng xa...)
+    private static decimal CalculateTotalSurcharge(TariffConfig tariff, decimal baseShippingCost)
     {
-        decimal total = 0;
+        if (tariff.Surcharges == null || !tariff.Surcharges.Any()) return 0m;
 
-        foreach (var surcharge in pricing.Surcharges)
+        decimal totalSurcharge = 0m;
+
+        foreach (var surcharge in tariff.Surcharges)
         {
             if (!surcharge.IsActive)
                 continue;
 
-            total += surcharge.IsPercentage
-                ? cost * surcharge.Value / 100
-                : surcharge.Value;
+            // Nếu là phí tính theo %, nhân với giá cước gốc (baseShippingCost) và chia 100
+            totalSurcharge += surcharge.IsPercentage
+                ? (baseShippingCost * surcharge.ValuePercentage) / 100m
+                : surcharge.FixedValue;
         }
 
-        return total;
+        return totalSurcharge;
     }
+}

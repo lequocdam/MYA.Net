@@ -1,24 +1,14 @@
 [ApiController]
 [Route("api/addresses")]
-public class AddressController(
-    IAddressService addressService) : ControllerBase
+public class AddressController(IMediator mediator) : ControllerBase
 {
-    private Guid userId =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
     [HttpGet]
-    public async Task<IActionResult> GetAll(
-        CancellationToken ct)
+    public async Task<IActionResult> Get(CancellationToken ct)
     {
-        var result = await addressService.GetAllAsync(
-            userId,
-            ct);
+        var result = await mediator.Send(
+            new GetAllAddressesQuery(User.GetUserId()), ct);
 
-        return Ok(new ApiResponse<AddressDto>
-        {
-            Message = "",
-            Data = result,
-        });
+        return Ok(result);
     }
 
     [HttpPost]
@@ -26,37 +16,24 @@ public class AddressController(
         CreateAddressDto dto,
         CancellationToken ct)
     {
-        var result = await addressService.CreateAsync(
-            userId,
-            dto,
-            ct);
+        var result = await mediator.Send(
+            new CreateCommand(dto), ct);
 
-        return Ok(new ApiResponse<AddressDto>
-        {
-            Message = "",
-            Data = result,
-        });
+        return Ok(result);
     }
 
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(
         Guid id,
-        UpdateAddressDto dto,
+        UpdateRequest request,
         CancellationToken ct)
     {
-        var userId = User.GetUserId();
+        var command = mapper.Map<UpdateCommand>(request)
+            with { Id = id };
 
-        var result = await addressService.UpdateAsync(
-            id,
-            dto,
-            userId,
-            ct);
+        var result = await mediator.Send(command, ct);
 
-        return Ok(new ApiResponse<AddressDto>
-        {
-            Message = "",
-            Data = result,
-        });
+        return Ok(result);
     }
 
     [HttpDelete("{id:guid}")]
@@ -64,10 +41,10 @@ public class AddressController(
         Guid id,
         CancellationToken ct)
     {
-        await addressService.DeleteAsync(
-            id,
-            userId,
-            ct);
+        await mediator.Send(
+            new DeleteAddressCommand(
+                id,
+                User.GetUserId()), ct);
 
         return NoContent();
     }

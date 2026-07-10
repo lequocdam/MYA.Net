@@ -1,65 +1,51 @@
-public class Address
+public class AddressEntity
 {
     public Guid Id { get; private set; }
-    public string Name { get; private set; }
-    public string Phone { get; private set; }
-    public string Street { get; private set; }
+    public Guid UserId { get; private set; }
     public Guid CityId { get; private set; }
     public Guid WardId { get; private set; }
+    public string Street { get; private set; }
     public double Latitude { get; private set; }
     public double Longitude { get; private set; }
     public bool IsDefault { get; private set; }
     public bool IsActive { get; private set; }
-    public Guid UserId { get; private set; }
+    public string Name { get; private set; }
+    public string Phone { get; private set; }
 
-    public static Address Create(
-        Guid userId,
-        string name,
-        string phone,
-        string street,
-        Guid wardId,
-        Guid cityId,
-        double latitude,
-        double longitude,
-        bool isDefault)
+    public static AddressEntity Create(
+        CurrentUser currentUser,
+        Address address,
+        Contact contact)
     {
-        return new Address
+        return new AddressEntity
         {
             Id = Guid.NewGuid(),
-            UserId = userId,
-            Name = name,
-            Phone = phone,
-            Street = street,
-            WardId = wardId,
-            CityId = cityId,
-            Latitude = latitude,
-            longitude = longitude,
-            IsDefault = isDefault,
-            IsActive = true
+            UserId = currentUser.UserId,
+            CityId = address.CityId,
+            WardId = address.WardId,
+            Street = address.Street,
+            Latitude = address.Latitude,
+            longitude = address.Longitude,
+            IsDefault = address.IsDefault,
+            IsActive = true,
+            Name = contact.Name,
+            Phone = contact.Phone
         };
     }
 
-    public static void Update(
-        string name,
-        string phone,
-        string street,
-        Guid wardId,
-        Guid cityId,
-        double latitude,
-        double longitude,
-        bool isDefault)
+    public void Update(
+        Address address,
+        Contact contact)
     {
-        return new Address
-        {
-            Name = name,
-            Phone = phone,
-            Street = street,
-            WardId = wardId,
-            CityId = cityId,
-            Latitude = longitude,
-            longitude = latitude,
-            IsDefault = isDefault
-        };
+        CityId = address.CityId;
+        WardId = address.WardId;
+        Street = address.Street;
+        Latitude = address.Latitude;
+        Longitude = address.Longitude;
+        IsDefault = address.IsDefault;
+
+        Name = contact.Name;
+        Phone = contact.Phone;
     }
 }
 

@@ -14,15 +14,15 @@ public class CreateValidator : AbstractValidator<CreateCommand>
 
         RuleFor(x => x.Name)
             .NotEmpty();
-            .WithMessage("Không tìm thấy tên");
+            .WithMessage("Tên không được rống");
 
         RuleFor(x => x.Phone)
             .NotEmpty();
-            .WithMessage("Không tìm thấy số điện thoại");
+            .WithMessage("Số điện thoại không được rỗng");
 
         RuleFor(x => x.Street)
             .NotEmpty();
-            .WithMessage("Không tìm thấy đường");
+            .WithMessage("Địa chỉ không được rỗng");
 
         RuleFor(x => x.Latitude)
             .NotEmpty();

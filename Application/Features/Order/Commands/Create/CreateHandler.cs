@@ -8,69 +8,59 @@ namespace MYA.Application.Orders.Commands.Create;
 public sealed class CreateHandler(
     ICurrentUserService currentUserService,
     IAddressRepository addressRepository,
-    IWarehouseRoutingService warehouseRoutingService,
     IQuoteService quoteService,
     IWriteOrderService writeOrderService,
     ILogger<CreateOrderCommandHandler> logger) : IRequestHandler<CreateCommand, Guid>
 {
-    public async Task<Guid> Handle(CreateOrderCommand request, CancellationToken ct)
+    public async Task<Guid> Handle(CreateCommand command, CancellationToken ct)
     {
-        var currentUser = currentUserService.GetCurrentUser();
+        var currentUser = currentUserService.GetCurrent();
 
-        var fromAddressEntity = await addressRepository.FirstOrDefaultAsync(request.FromAddressId, ct)
-            ?? throw new NotFoundException("From address", request.FromAddressId);
+        var fromTask = addressRepository.GetByIdAsync(command.FromAddressId, ct);
+        var toTask = addressRepository.GetByIdAsync(command.ToAddressId, ct);
 
-        var toAddressEntity = await addressRepository.FirstOrDefaultAsync(request.ToAddressId, ct)
-            ?? throw new NotFoundException("To address", request.ToAddressId);
+        await Task.WhenAll(fromTask, toTask);
 
-        AddressPolicy.Validate(
-            currentUser,
-            fromAddress, toAddress);
+        var fromAddress = await fromTask;
+            ?? throw new NotFoundException("From address");
+        var fromAddress = await toTask;
+            ?? throw new NotFoundException("To address");
+            
+        AddressPolicy.EnsureActive(fromAddress);
+        AddressPolicy.EnsureActive(toAddress);
+        AddressPolicy.EnsureDifferent(fromAddress, ToAddress);
 
-        var warehouse = await warehouseRoutingService.AssignWarehouseAsync(
-            fromAddress,
-            request.ServiceId,
-            ct);
-
-        var quote = await quoteService.GetAsync(
-            request.ServiceId,
-            fromAddressEntity,
-            toAddressEntity,
-            request.Cod,
-            request.Items,
-            ct);
-
-        var items = request.Items
-            .Select(x => new Item(
+        var items = command.Items
+            .Select(x => OrderItem.Create(
                 x.Name,
+                x.WeightKg,
                 x.Quantity,
-                x.Weight,
-                x.Length,
-                x.Width,
-                x.Height))
+                x.LenghtCm,
+                x.WidthCm,
+                x.HeightCm))
             .ToList();
 
-        var order = new Order(
-            UserId = currentUser.userId,
-            WarehouseId = warehouse.Id,
-            ServiceId = request.ServiceId,
-            Quote = quote,
-            Items = items);
-        
-        try
-        {
-            var orderId = await writeOrderService.CreateAsync(
-                order,
-                fromAddressEntity,
-                toAddressEntity,
-                ct);
+        var warehouse = await routingService.AssignWarehouseAsync(new WarehouseSelectionRequest(
+            command.FromAddress,
+            command.ToAddress),
+            ct);
 
-            return orderId;
-        }
-        catch (Exception e)
-        {
-            logger.LogError(e, "CreateOrder failed. UserId={UserId}", currentUser.Id);
-            throw;
-        }
+        var price = await quoteService.GetAsync(new QuoteInput(
+            command.ServiceId,
+            from, to,
+            command.Cod,
+            command.Items),
+            ct);
+
+        var orderContext = new OrderContext(  
+            currentUser.Id,
+            warehouse.Id,
+            command.ServiceId,
+            from,
+            to,
+            price,
+            items);
+
+        return await writeService.CreateAsync(orderContext, ct);
     }
 }
