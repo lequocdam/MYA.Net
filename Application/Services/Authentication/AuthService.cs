@@ -8,12 +8,13 @@ public class AuthService(
 {
     private const int RefreshDays     = 7;
 
-    // REGISTER
     public async Task RegisterAsync(RegisterDto dto, CancellationToken ct)
     {
         var exists = await userRepository.SelectByPhoneOrEmailAsync(dto.Phone, dto.Email, ct);
         if (exists)
             throw new ConflictException("Phone or email registered");
+
+        RegistrationPolicy.EnsurePhoneOrEmailAvailable(exists);
 
         await otpService.SendOtpAsync(dto, ct);
     }

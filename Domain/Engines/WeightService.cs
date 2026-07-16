@@ -1,6 +1,6 @@
 namespace MYA.Domain.Services;
 
-public class WeightService : IWeightService
+public class WeightCalculator : IWeightCalculator
 {
     private const decimal RoadDivisor = 5000m; 
 

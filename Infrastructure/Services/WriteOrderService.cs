@@ -10,12 +10,12 @@ public sealed class OrderWriteService(
     IUnitOfWork unitOfWork) : IOrderWriteService
 {
     public async Task<Guid> CreateAsync(
-        Order order, 
+        CreateContext createContext, 
         CancellationToken ct)
     {
         await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
-        var orderAggregate = Order.Create(order);
+        var order = Order.Create(order);
 
         await orderRepository.AddAsync(orderAggregate, ct);
 
