@@ -1,167 +1,596 @@
+using BCrypt.Net;
+
 public class AuthenticationService(
-    IUserRepository repository,
-    IRegisterService register,
-    IOtpService otp) : IAuthService
+    IUserRepository userRepository,
+    IRegistrationRepository registrationRepository,
+    IOutboxRepository outboxRepository,
+    IUnitOfWork unitOfWork,
+    //Redis/Services
+    IIdempotencyService idempotencyService,
+    IOtpService otpService,
+    ILoginAttemptStore loginAttemptStore,
+    IEmailNormalizer emailNormalizer,
+    IPhoneNormalizer phoneNormalizer
+    IPasswordHasher passwordHasher) : IAuthenticationService
 {
-    public async Task<RegisterResponse> RegisterAsync(
-        RegisterRequest request,
-        CancellationToken ct)
+    public async Task<RegisterResponse> RegisterAsync(RegisterRequest request, CancellationToken ct)
     {
-        var exists = await repository.ExistsByPhoneOrEmailAsync(
-            request.Phone,
-            request.Email,
-            ct);
+        var email = emailNormalizer.Normalize(request.Email);
+        var phone = phoneNormalizer.Normalize(request.Phone);
 
-        UserPolicy.CanRegister(exists);
+        var existedUser = await userRepository.ExistAsync(email, phone, ct);
 
-        var id = Guid.NewGuid();
+        if (existedUser)
+        {
+            throw new ConflictException("User is registered.");
+        }
 
-        await register.SaveAsync(new RegisterModel{
-            Id = id,
-            Name = request.Name,
-            Phone = request.Phone,
-            Email = request.Email,
-            HashPassword = passwordHasher.Hash(request.Password)
-        }, ct);
+        var existedRegistration = await registrationRepository.ExistAsync(email, phone, ct);
+
+        if (existedRegistration)
+        {
+            throw new ConflictException("Registration is registered. Please confirm again.");
+        }
+
+        var hashedPassword = await passwordHasher.Hash(request.Password);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
         try
         {
-            await otp.SendAsync(new SendModel{
-                Id = id,
-                Target = request.Email,
-                Channel = OtpChannel.Email, 
-                Purpose = OtpPurpose.Register
-            }, ct);
+            var registration = Registration.Create(
+                name, 
+                email, 
+                phone, 
+                hashedPassword);
+
+            await registrationRepository.AddAsync(registration, ct);
+
+            var @event = new RegistrationCreatedEvent
+            {
+                RegistrationId = registration.Id,
+                Email = registration.Email
+            };
+
+            var payload = JsonSerializer.Serialize(@event);
+            var message = OutboxMessage.Create(OutboxMessageType.RegistrationCreated, payload);
+
+            await outboxRepository.AddAsync(message, ct);
+
+            try
+            {
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+            {
+                throw new ConflictException("Registration is registered. Please confirm again.");
+            }
+
+            await transaction.CommitAsync(ct);
+
+            return new RegisterResponse
+            {
+                RegistrationId = registration.Id,
+            };
         }
         catch
         {
-            await register.RemoveAsync(model.Id, ct);
+            await transaction.RollbackAsync(ct);
             throw;
         }
-
-        return new RegisterResponse
-        {
-            Id = id,
-            ExpiresIn = 300
-        };
     }
 
-    public async Task<LoginResponse> ConfirmAsync(
+    public async Task<ConfirmResponse> ConfirmAsync(
         ConfirmRequest request,
         CancellationToken ct)
     {
-        var r = await register.GetAsync(request.Id, ct);
-            ?? throw new RegisterExpiredException();
+        var registration = await registrationRepository.GetByIdAsync(request.RegistrationId, ct)
+            ?? throw new NotFoundException("Registration not found.");
 
-        if (r.IsVerified)
-        {
-             var user = await CreateAsync(r, ct);
-
-            await register.RemoveAsync(r.Id, ct);
-
-            return await token.GenerateAsync(user, ct);
-        }
-
-        await otp.VerifyAsync(new VerifyModel
-        {
-            Id = request.Id,
-            Code = request.Code
-        }, ct);
-
-        r.IsVerified = true;
-        await register.UpdateAsync(r, ct);
-
-        var user = await CreateAsync(r, ct);
-    
-        await register.RemoveAsync(request.Id, ct);
-
-        return await token.GenerateAsync(user, ct);
-    }
-
-    private async Task<LoginResponse> CreateAsync(RegisterModel r, CancellationToken ct)
-    {
-        var user = User.Create(r.Name, r.Phone, r.Email, r.HashPassword);
+        if (!registration.IsPending())
+            throw new ConflictException("Registration is confirmed.");
         
-        await userRepository.AddAsync(user, ct);
-        await userRepository.SaveChangesAsync(ct);
-    }
+        var verified = await otpService.VerifyAsync(request.RegistrationId, request.Code, ct);
 
-    // RESEND OTP
-    public async Task ResendOtpAsync(ResendOtpDto dto, CancellationToken ct)
-    {
-        await otpService.ResendOtpAsync(dto, ct);
-    }
+        if (!verified)
+            throw new InvalidException("Invalid OTP.");
 
-    public async Task<UserDto> VerifyAsync(VerifyRequest request, CancellationToken ct)
-    {
-        var userCache = await otpService.VerifyOtpAsync(request.Otp, ct);
-
-        var user = User.Create(new CreateContext(
-            userCache.Name,
-            userCache.Phone,
-            userCache.Email,
-            userCache.Password,
-        ));
-
-        await repository.Add(user, ct);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
         try
         {
+            var user = User.Create(
+                registration.Name,
+                registration.Email,
+                registration.Phone,
+                registration.HashedPassword);
+
+            await userRepository.AddAsync(user, ct);
+
+            registration.MarkConfirmed();
+
+            var @event = new RegistrationOtpConsumedEvent
+            {
+                RegistrationId = registration.Id
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.ConsumeRegistrationOtp, @event);
+
+            await outboxRepository.AddAsync(message, ct);
+
+            var accessToken = await tokenService.GenerateAccessToken(user);
+            var refreshToken = await refreshTokenService.GenerateAsync(user.Id);
+
+            try
+            {
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+            {
+                throw new ConflictException("User is registered.");
+            }
+
+            await transaction.CommitAsync(ct);
+
+            return new TokenData
+            {
+                AccessToken = accessToken.Token, 
+                AccessExpiresAt = accessToken.ExpiresAt, 
+                RefreshToken = refreshToken.Token, 
+                RefreshExpiresAt = refreshToken.ExpiresAt
+            };
+        }
+        catch
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
+    }
+
+    public async Task ResendAsync(
+        ResendRequest request,
+        CancellationToken ct)
+    {
+        var registration = await registrationRepository.GetByIdAsync(request.RegistrationId, ct)
+            ?? throw new NotFoundException("Registration not found.");
+
+        if (!registration.IsPending())
+            throw new ConflictException("Registration is confirmed.");
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        try
+        {
+            var @event = new SendRegistrationOtpEvent
+            {
+                RegistrationId = registration.Id,
+                Email = registration.Email
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.SendRegistrationOtp, @event);
+
+            await outboxRepository.AddAsync(message, ct);
             await unitOfWork.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
         }
-        catch (DbUpdateException e)
+        catch
         {
-            logger.LogWarning("{Phone} or {Email} duplicated", user.Phone, user.Email, e);
-            throw new ConflictException("Phone or email registered");
+            await transaction.RollbackAsync(ct);
+            throw;
         }
     }
 
-    // LOGIN
-    public async Task<TokenDto> LoginAsync(LoginDto dto, CancellationToken ct)
+    public async Task ForgotPasswordAsync(
+        ForgotPasswordRequest request,
+        CancellationToken ct)
     {
-        var user = await userRepo.FirstOrDefaultAsync(dto.Phone, ct);
-        if (user is null)
+        var email = emailNormalizer.Normalize(request.Email);
+        var phone = phoneNormalizer.Normalize(request.Phone);
+
+        var user = await userRepository.GetByUniqueAsync(email, phone, ct)
+            ?? throw new NotFoundException("Invalid email or phone.");
+
+        var resetToken = await tokenService.GenerateResetToken(user);
+
+        await ResetStore.SetAsync(resetToken, user.Id, TimeSpan.FromMinutes(10), ct);
+
+        var @event = new ForgotPasswordEvent
         {
-            throw new NotFoundException("Phone not found");
+            UserId = user.Id,
+            Email = user.Email,
+            ResetToken = resetToken
+        };
+
+        var message = OutboxMessage.Create(OutboxMessageType.ForgotPassword, @event);
+
+        await outboxRepository.AddAsync(message, ct);
+        await unitOfWork.SaveChangesAsync(ct);
+    }
+
+    public async Task ForgotPasswordConfirmAsync(
+        ForgotPasswordConfirmRequest request,
+        CancellationToken ct)
+    {
+        var session = await resetStore.GetAsync(request.ResetToken, ct)
+            ?? throw new InvalidException("Reset token is invalid or expired.");
+
+        var user = await userRepository.GetByIdAsync(session.UserId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        await otpService.VerifyAsync(session.OtpId, request.Code, ct);
+
+        var hashedPassword = await passwordHasher.Hash(request.NewPassword);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+        try
+        {
+            user.ResetPassword(hashedPassword);
+
+            await sessionRepository.RevokeAllAsync(user.Id, ct);
+            await unitOfWork.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+    }
+
+    public async Task<TokenData> LoginAsync(
+        LoginRequest request,
+        CancellationToken ct)
+    {
+        var email = emailNormalizer.Normalize(request.Email);
+        var phone = phoneNormalizer.Normalize(request.Phone);
+
+        var user = await userRepository.GetByUniqueAsync(email, phone, ct)
+            ?? throw new UnauthorizedException("Invalid email/phone or password.");
+
+        if (user.IsDeleted)
+            throw new ConflictException("User is deleted.");
+
+        var lockout = await loginAttemptStore.GetLockoutAsync(user.Id, ct);
+
+        if (lockout.IsLocked)
+        {
+            throw new UnauthorizedException($"User is locked. Try again after {lockout.LockedUntil}.");
         }
 
-        if (!BCrypt.Net.BCrypt.Verify(dto.Password, user.Password))
+        var verified = await passwordHasher.Verify(request.Password, user.HashedPassword);
+
+        if (!verified)
         {
-            throw new UnauthorizedException("Invalid password");
+            await loginAttemptStore.RegisterFailedAttemptAsync(user.Id, ct);
+
+            throw new UnauthorizedException("Invalid email/phone or password.");
         }
 
-        var accessToken  = tokenService.GenerateAccessToken(user);
-        var refreshToken = await refresh.CreateAsync(user.Id, ct);
+        await loginAttemptStore.ResetAsync(user.Id, ct);
 
-        return new TokenDto{
-            AccessToken  = accessToken,
-            RefreshToken = refreshToken,
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        try
+        {
+            var session = Session.Create(
+                user.Id,
+                requestContext.Ip,
+                requestContext.Agent,
+                requestContext.Device);
+
+            var refreshToken = await refreshTokenService.GenerateAsync(user.Id, session.Id);
+            var accessToken = await tokenService.GenerateAccessToken(user, session.Id);
+
+            await sessionRepository.AddAsync(session, ct);
+            await unitOfWork.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
+
+        return new TokenData
+        {
+            AccessToken = accessToken.Token, 
+            AccessExpiresAt = accessToken.ExpiresAt, 
+            RefreshToken = refreshToken.Token, 
+            RefreshExpiresAt = refreshToken.ExpiresAt
         };
     }
 
-    // REFRESH
-    public async Task<TokensDTO> RefreshAsync(RefreshDTO Dto, Guid UserId)
+    public async Task<TokenData> RefreshAsync(string rawRefreshToken, CancellationToken ct)
     {
-        var user = await repo.FirstOrDefaultAsync(UserId);
+        var data = await refreshTokenService.RotateAsync(rawRefreshToken, ct);
 
-        var accessToken  = token.GenerateAccessToken(user);
-        var refreshToken = refresh.RefreshAsync(Dto.RefreshToken);
+        var user = await userRepository.GetByIdAsync(data.UserId, ct)
+            ?? throw new UnauthorizedException("Invalid refresh token.");
 
-        return new TokensDTO{
-            accessToken, 
-            refreshToken,
+        if (user.IsDeleted())
+            throw new ConflictException("User is deleted.");
+
+        var accessToken = await tokenService.GenerateAccessTokenAsync(user, refreshToken.SessionId, ct);
+
+        return new TokenData
+        {
+            AccessToken = accessToken.Token, 
+            AccessExpiresAt = accessToken.ExpiresAt, 
+            RefreshToken = refreshToken.Token, 
+            RefreshExpiresAt = refreshToken.ExpiresAt
         };
     }
 
-    // LOGOUT
-    public async Task LogoutAsync(RefreshDTO Dto, string? Jti)
+    public async Task LogoutAsync(
+        LogoutRequest request, 
+        string? jti, 
+        CancellationToken ct = default)
     {
-        await refresh.LogoutAsync(Dto.RefreshToken, Jti);
+        var refreshToken = await refreshTokenService.RevokeAsync(
+            request.RefreshToken, 
+            reason: "Log out", 
+            ct);
+
+        if (refreshToken == null)
+        {
+            return;
+        }
+
+        await refreshTokenService.RevokeSessionAsync(
+            refreshToken.SessionId,
+            reason: "Log out", 
+            ct);
+
+        if (!string.IsNullOrEmpty(jti))
+        {
+            await cacheService.SetBlacklistAsync(jti, expiredAt: TimeSpan.FromMinutes(15), ct);
+        }
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await auditService.LogAsync(
+            UserId: refreshToken.UserId,
+            SessionId: refreshToken.SessionId,
+            Event: AuditEvent.LogoutSuccess,
+            ct);
     }
 
-    // LOGOUT ALL
-    public async Task LogoutAllAsync(Guid userId, string reason, string? Jti)
+    public async Task LogoutAllAsync(LogoutAllRequest request, string? Jti, CancellationToken ct = default)
     {
-        await refresh.DeleteAllAsync(userId, Jti);
+        await refreshTokenService.RevokeAllAsync(
+            userId, 
+            reason: "Log out all", 
+            ct);
+
+        if (!string.IsNullOrEmpty(jti))
+        {
+            await cacheService.SetBlacklistAsync(jti, expiredAt: TimeSpan.FromMinutes(15), ct);
+        }
+
+        await unitOfWork.SaveChangesAsync(ct)
+
+        await auditService.LogAsync(
+            UserId: userId,
+            SessionId: null,
+            Even: AuditEvent.LogoutAllSuccess,
+            ct);
+    }
+
+    public async Task<UserResponse> GetMeAsync(CancellationToken ct)
+    {
+        var profile = await userRepository.GetProfileAsync(currentUser.UserId, ct)
+            ?? throw new NotFoundException("Profile not found.");
+
+        return mapper.Map<UserResponse>(user);
+    }
+
+    public async Task<UserResponse> UpdateProfileAsync(
+        UpdateProfileRequest request,
+        CancellationToken ct)
+    {
+        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        user.UpdateProfile(request.Name);
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        return mapper.Map<UserResponse>(user);
+    }
+
+    public async Task ChangeEmailAsync(ChangeEmailRequest request, CancellationToken ct)
+    {
+        var currentUser = currentUserService.GetCurrent();
+
+        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        var newEmail = emailNormalizer.Normalize(request.NewEmail);
+
+        if (newEmail == user.Email)
+        {
+            throw new ConflictException("New email must be different.");
+        }
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        var currentContactChange = await contactChangeRepository.GetByUserIdAsync(
+            user.Id,
+            ContactChangeType.Email,
+            ct);
+
+        if (currentContactChange != null)
+        {
+            throw new ConflictException("There is already a contact change.");
+        }
+
+        var newContactChange = ContactChange.Create(
+            user.Id,
+            ContactChangeType.Email,
+            newEmail,
+            user.Email);
+
+        await contactChangeRepository.AddAsync(newContactChange, ct);
+
+        var @event = new ChangeEmailRequestedEvent
+        {
+            UserId = user.Id,
+            NewEmail = newEmail
+        };
+
+        var payload = JsonSerializer.Serialize(@event);
+
+        var message = OutboxMessage.Create(
+            OutboxMessageType.ChangeEmailRequestedEvent,
+            payload);
+
+        await outboxRepository.AddAsync(message, ct);
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task ChangePhoneAsync(
+        ChangePhoneRequest request,
+        CancellationToken ct)
+    {
+        var currentUser = currentUserService.GetCurrent();
+
+        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        var newPhone = phoneNormalizer.Normalize(request.NewPhone);
+
+        if (newPhone == user.Phone)
+        {
+            throw new ConflictException("New email must be different.");
+        }
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        var contactChange = await contactChangeRepository.GetByUserIdAsync(
+            user.Id,
+            ContactChangeType.Phone,
+            ct);
+
+        if (contactChange != null)
+        {
+            throw new ConflictException("There is already a contact change.");
+        }
+
+        var contactChange = ContactChange.Create(
+            user.Id,
+            ContactChangeType.Phone,
+            newPhone,
+            user.Email);
+
+        await contactChangeRepository.AddAsync(contactChange, ct);
+
+        var @event = new ChangeEmailRequestedEvent
+        {
+            UserId = user.Id,
+            Email = user.Email
+        };
+
+        var payload = JsonSerializer.Serialize(@event);
+
+        var message = OutboxMessage.Create(
+            OutboxMessageType.ChangePhoneRequestedEvent,
+            payload);
+
+        await outboxRepository.AddAsync(message, ct);
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task ConfirmAsync(
+        ConfirmRequest request,
+        CancellationToken ct)
+    {
+        var currentUser = currentUserService.GetCurrent();
+
+        await otpService.VerifyAsync(
+            currentUser.UserId,
+            request.Code,
+            ct);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        var contactChange = await contactChangeRepository.GetAsync(
+            currentUser.UserId,
+            ContactChangeType.Email,
+            ct)
+            ?? throw new NotFoundException("Contact change not found.");
+
+        var exists = await userRepository.CheckExistsAsync(contactChange.NewValue, ct);
+
+        if (exists)
+        {
+            throw new ConflictException("");
+        }
+
+        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        user.ChangeEmail(contactChange.NewValue);
+
+        changeRequest.MarkConfirm();
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task ConfirmAsync(
+        ConfirmRequest request,
+        CancellationToken ct)
+    {
+        var currentUser = currentUserService.GetCurrent();
+
+        await otpService.VerifyAsync(
+            currentUser.UserId,
+            request.Code,
+            ct);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        var contactChange = await contactChangeRepository.GetAsync(
+            currentUser.UserId,
+            ContactChangeType.Phone,
+            ct)
+            ?? throw new NotFoundException("Contact change not found.");
+
+        var exists = await userRepository.CheckExistsAsync(contactChange.NewValue, ct);
+
+        if (exists)
+        {
+            throw new ConflictException("");
+        }
+
+        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        user.ChangePhone(contactChange.NewValue);
+
+        changeRequest.MarkConfirm();
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task ChangePasswordAsync(
+        ChangePasswordRequest request,
+        CancellationToken ct)
+    {
+        var user = await userRepository.GetByIdAsync(userId, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        userPolicy.CanChangePassword(user, request);
+
+        user.ChangePassword(BCrypt.Hash(request.NewPassword));
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await sessionService.RevokeAllAsync(
+            user.Id,
+            ct);
     }
 }

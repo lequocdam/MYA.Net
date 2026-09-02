@@ -1,10 +1,13 @@
-public sealed class UserRepository(AppDbContext db) : IUserRepository
+public sealed class UserRepository(AppDbContext dbContext) : IUserRepository
 {
-    public async Task<bool> AnyAsync(string phone, string email,
+    public async Task<bool> CheckExistsByContactAsync(
+        string email, 
+        string phone,
         CancellationToken ct = default)
     {
-        return await db.Users.AnyAsync(
-            u => u.Phone == phone || u.Email == email,
+        return await dbContext.Users.AnyAsync(u =>
+            u.Phone == phone || 
+            u.Email == email,
             ct);
     }
 
@@ -19,6 +22,9 @@ public sealed class UserRepository(AppDbContext db) : IUserRepository
         await db.Users.AddAsync(user, ct);
     }
 
-    public Task SaveChangesAsync(CancellationToken ct = default)
+    public Task CheckExistsByContactAsync(
+        string email,
+        string phone,
+        CancellationToken ct = default)
         => db.SaveChangesAsync(ct);
 }

@@ -25,28 +25,15 @@ public sealed class OrderAggregate : AggregateRoot<Guid>
 
     private Order(){}
 
-    public static Order Create(
-        Guid userId,
-        Guid warehouseId,
-        Guid serviceId,
-        Guid fromId,
-        Guid toId,
-        Address from,
-        Address to,
-        decimal codAmount,
-        Price price,
-        IEnumerable<OrderItem> items)
+    public static Order Create(CreateContext createContext)
     {
-        OrderPolicy.ValidateCreate(items);
+        OrderPolicy.ValidateCreate(createContext);
 
         var order = new Order
         {
             Id = Guid.NewGuid(),
             UserId = userId,
-            WarehouseId = warehouseId,
             ServiceId = serviceId,
-            FromId = fromId,
-            ToId = toId,
             From = From,
             To = To,
             Code = GenerateCode(),

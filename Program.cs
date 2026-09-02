@@ -33,6 +33,37 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.AddPolicy("auth-ip", httpContext =>
+    {
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ip,
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            });
+    });
+
+    options.AddPolicy("login", httpContext =>
+        return RateLimitPartition.GetFixedWindowLimiter(
+        partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        factory: _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+});
+
+builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreatingOrderDTOValidator>();
 
@@ -43,60 +74,34 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
 builder.Services.AddScoped<IRedisService, RedisService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddHttpContextAccessor();
+builder.services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IRegistrationRepository, RegistrationRepository>();
+
+services.AddScoped<IEmailNormalizer, EmailNormalizer>();
+services.AddScoped<IPhoneNormalizer, PhoneNormalizer>();
+// Startup / Program.cs
+services.AddHangfire(config => config.UsePostgreSqlStorage(connectionString)); // hoặc SQL Server
+services.AddHangfireServer();
+
+// Sau khi app start
+RecurringJob.AddOrUpdate<CleanupExpiredRegistrationsJob>(
+    "cleanup-expired-registrations",
+    job => job.ExecuteAsync(CancellationToken.None),
+    Cron.Hourly); // chạy mỗi giờ
 
 builder.Services.AddStackExchangeRedisCache(opt =>
     opt.Configuration = builder.Configuration["Redis:Connection"]);
 
-builder.Services.Configure<IpRateLimitOptions>(
-    builder.Configuration.GetSection("IpRateLimiting"));
-
-builder.Services.AddSingleton<IIpPolicyStore, DistributedCacheIpPolicyStore>();
-builder.Services.AddSingleton<IRateLimitCounterStore, DistributedCacheRateLimitCounterStore>();
-builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>();
-builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
-builder.Services.AddInMemoryRateLimiting();
-
 builder.Services.AddAutoMapper(typeof(OrderProfile));
 
-builder.Services.AddRateLimiter(options =>
-{
-    // Rate limit cho Register — theo Email từ request body
-    // Không dùng IP vì cùng IP có thể nhiều user (NAT, văn phòng)
-    options.AddPolicy("register", httpContext =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            // Key theo email — lấy từ form/body không được ở đây
-            // nên dùng IP làm fallback, xử lý theo email trong service
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit          = 3,               // 3 lần
-                Window               = TimeSpan.FromMinutes(1),  // trong 1 phút
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit           = 0,               // không queue — reject ngay
-            }));
-
-    // Trả về 429 thay vì 503
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-
-    // Custom response khi bị block
-    options.OnRejected = async (context, ct) =>
-    {
-        context.HttpContext.Response.StatusCode = 429;
-        await context.HttpContext.Response.WriteAsJsonAsync(new
-        {
-            message = "Quá nhiều yêu cầu. Vui lòng thử lại sau."
-        }, ct);
-    };
-});
-
-app.UseRateLimiter(); 
 var app = builder.Build();
-app.UseIpRateLimiting();
+app.UseRateLimiter(); 
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

@@ -1,7 +1,8 @@
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
-    public DbSet<Refresh> Refreshs => Set<Refresh>();
+
+    public DbSet<Registration> Registrations => Set<Registration>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -9,19 +10,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.HasKey(u => u.Id);
 
-            e.Property(u => u.Avatar)
-                .HasMaxLength(500);
-
             e.Property(u => u.Name)
                 .HasMaxLength(100)
                 .IsRequired();
 
             e.Property(u => u.Phone)
-                .HasMaxLength(10)
+                .HasMaxLength(16)
                 .IsRequired();
 
             e.HasIndex(u => u.Phone)
                 .IsUnique();
+                .HasFilter("[IsDeleted] = 0");
 
             e.Property(u => u.Email)
                 .HasMaxLength(255)
@@ -29,37 +28,38 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
             e.HasIndex(u => u.Email)
                 .IsUnique();
+                .HasFilter("[IsDeleted] = 0");
 
-            e.Property(u => u.Password)
+            e.Property(u => u.HashPassword)
+                .HasMaxLength(512)
+                .IsRequired();
+        });
+
+        b.Entity<Registration>(e =>
+        {
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.Name)
+                .HasMaxLength(100)
+                .IsRequired();
+
+            e.Property(x => x.Phone)
+                .HasMaxLength(12)
+                .IsRequired();
+
+            e.HasIndex(x => x.Phone)
+                .IsUnique();
+
+            e.Property(x => x.Email)
                 .HasMaxLength(255)
                 .IsRequired();
 
-            e.Property(u => u.Role)
-                .HasDefaultValue("user");
-        });
+            e.HasIndex(x => x.Email)
+                .IsUnique();
 
-        b.Entity<RefreshToken>(e =>
-        {
-            e.HasKey(t => t.Id);
-
-            // Lookup theo hash khi validate — phải nhanh
-            e.HasIndex(t => t.TokenHash).IsUnique();
-
-            // Revoke toàn bộ family theo FamilyId — phải nhanh
-            e.HasIndex(t => t.FamilyId);
-
-            // Cleanup job: tìm token hết hạn theo UserId
-            e.HasIndex(t => new { t.UserId, t.ExpiresAt });
-
-            // DeviceId nullable — client có thể không gửi
-            e.Property(t => t.DeviceId).HasMaxLength(128);
-            e.Property(t => t.IpAddress).HasMaxLength(45);   // IPv6 max
-            e.Property(t => t.UserAgent).HasMaxLength(512);
-            e.Property(t => t.RevokeReason).HasMaxLength(64);
-
-            // Không map computed properties sang DB
-            e.Ignore(t => t.IsExpired);
-            e.Ignore(t => t.IsActive);
+            e.Property(x => x.HashPassword)
+                .HasMaxLength(255)
+                .IsRequired();
         });
     }
 }

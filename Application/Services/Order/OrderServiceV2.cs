@@ -1,5 +1,5 @@
 public class OrderService(
-    IOrderRepository          orderRepository,
+    IOrderRepository repository,
     IOrderHistoryRepository   orderHistoryRepository,
     ITrackingRepository       trackingRepository,
     IAddressRepository        addressRepository,
@@ -11,7 +11,7 @@ public class OrderService(
     // Specs
     IOrderPermissionSpecification orderPermissionSpec,
     IFilterOrderSpec filterOrderSpec,
-    IEventBus             eventBus,
+    IEventBus        eventBus,
     ILogger<OrderService> logger
 ) : IOrderService
 {
@@ -38,26 +38,38 @@ public class OrderService(
 
     public async Task<Guid> CreateAsync(
         CurrentUser currentUser, 
-        CreateReq req, 
+        CreateRequest request, 
         CancellationToken ct)
     {
-        var fromAddress = await addressRepository.FindByIdAsync(req.FromAddressId, ct);
-        var toAddress = await addressRepository.FindByIdAsync(req.ToAddressId, ct);
+        var userId = user.Id;
 
-        var items = req.Items
-            .Select(x => Item.Create(x.Name, x.Quantity, x.Weight, x.Length, x.Width, x.Height))
+        var fromAdddressTask = addressRepository.GetByIdAsync(request.FromAddressId, ct);
+        var toAddressTask = addressRepository.GetByIdAsync(request.ToAddressId, ct);
+
+        await Task.WhenAll(fromTask, toTask);
+
+        var fromAddress = await fromAdddressTask ?? throw new NotFoundException("From address");
+        var toAddress = await toAddressTask ?? throw new NotFoundException("To address");
+
+        AddressPolicy.EnsureDifferent(fromAddress, toAddress);
+
+        var items = request.Items
+            .Select(x => OrderItem.Create(
+                x.Name,
+                x.WeightKg,
+                x.Quantity,
+                x.LengthCm,
+                x.WidthCm,
+                x.HeightCm))
             .ToList();
 
-        var warehouse = await warehouseService.GetByAddressAsync(fromAddress, ct);
-
-        var quote = await quoteService.GetAsync(
-            req.ServiceId, fromAddress, toAddress, req.Cod, items, ct);
-
-        var createContext = new CreateContext(
-            currentUser.UserId, warehouse.Id, req.ServiceId,
-            fromAddress, toAddress, quote, items);
-
-        return await CreateCoreAsync(createContext, ct);
+        return await CreateCoreAsync(new CreateContext(  
+            currentUsser.Id,
+            fromAddress,
+            toAddress,      
+            request.ServiceId,
+            request.Items
+        ), ct);
     }
 
     public async Task<OrderListDto> CreateListAsync(
@@ -369,57 +381,57 @@ public class OrderService(
         return new BulkResultDto(result.Succeeded, allFailed);
     }
 
-    private async Task<Guid> CreateCoreAsync(
-        CreateContext createContext,
+    public async Task<Guid> CreateCoreAsync(CreateContext createContext, CancellationToken ct)
+    {
+        var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        var order = Order.Create(createContext);
+
+        await repository.AddAsync(order, ct);
+
+        await unitOfWork.SaveChangesAsync(ct);
+
+        await SaveOrderHistoryAsync(order, ct);
+
+        await SaveTrackingAsync(order, ct);
+
+        await transaction.CommitAsync(ct);
+
+        return order;
+    }
+
+    private async Task SaveOrderHistoryAsync(
+        Order order,
         CancellationToken ct)
     {
-        await using var transaction = await orderRepo.BeginTransactionAsync(ct);
-        try
-        {
-            var order = Order.Create(
-                createContext.UserId,
-                createContext.WarehouseId,
-                createContext.ServiceId,
-                createContext.Quote,
-                createContext.Items,
-            )
-
-            await orderRepo.AddAsync(order, ct);
-
-            var fromAddressSnap = AddressSnapshot.Create(order.Id, createContext.FromAddress);
-            var toAddressSnap = AddressSnapshot.Create(order.Id, createContext.ToAddress);
-
-            await addressSnapshotRepo.AddAsync(fromAddressSnap, ct);
-            await addressSnapshotRepo.AddAsync(toAddressSnap, ct);
-
-            var orderHistory = OrderHistory.Create(
+        await orderHistoryRepository.AddAsync(
+            OrderHistory.Create(
                 order.Id,
                 order.UserId,
-                order.Status
-            )
+                order.Status),
+            ct);
+    }
 
-            await orderHistoryRepo.AddAsync(orderHistory, ct);
-
-            var tracking = Tracking.Create(
+    private async Task SaveTrackingAsync(
+        Order order,
+        CancellationToken ct)
+    {
+        await trackingRepository.AddAsync(
+            Tracking.Create(
                 order.Id,
-                order.Status
-            )
-            
-            await trackingRepo.AddAsync(tracking, ct);
+                order.Status),
+            ct);
+    }
 
-            await orderRepo.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
-
-            await eventBus.Publish(new OrderCreatedEvent(order.Id));
-
-            return order.Id
-        }
-        catch (Exception e)
-        {
-            await transaction.RollbackAsync(ct);
-            logger.LogError(e, "CreateCore failed. UserId={UserId}", userId);
-            throw;
-        }
+    private async Task PublishOrderCreatedAsync(
+        Order order,
+        CancellationToken ct)
+    {
+        await outboxRepository.AddAsync(
+            OutboxMessage.Create(
+                nameof(OrderCreatedEvent),
+                new OrderCreatedEvent(order.Id)),
+            ct);
     }
 
     private async Task<BulkResultDto> TransitionCoreAsync(

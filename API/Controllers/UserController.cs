@@ -3,33 +3,31 @@
 [Authorize]
 public class UserController(IUserService userService) : ControllerBase
 {
-    private Guid userId =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
     [HttpGet]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> GetAll(
-        [FromQuery] UserFilterDTO filter, CancellationToken ct)
+    public async Task<IActionResult> GetUsers(
+        [FromQuery] GetUsersRequest request,
+        CancellationToken ct)
     {
-        var pageUsers = await userService.AllAsync(filter, ct);
+        var result = await userService.GetUsersAsync(request, ct);
 
-        return Ok(new ApiResponse<Page<UserDto>>
+        return Ok(new ApiResponse<PagedResult<UserResponse>>
         {
-            Message = "",
-            Data    = pageUsers,
+            Message = "Users retrieved successfully.",
+            Data = result
         });
     }
 
     [HttpGet("{id:guid}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> GetDetail(Guid id, CancellationToken ct)
+    public async Task<IActionResult> GetById(
+        Guid id,
+        CancellationToken ct)
     {
-        var result = await userService.GetDetailAsync(id, ct);
+        var result = await userService.GetByIdAsync(id, ct);
 
-        return Ok(new ApiResponse<UserDto>
+        return Ok(new ApiResponse<UserResponse>
         {
-            Message = "Account detail got",
-            Data    = result,
+            Message = "User retrieved successfully.",
+            Data = result
         });
     }
 
@@ -46,62 +44,86 @@ public class UserController(IUserService userService) : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Post(
-        [FromBody] CreateUserDto dto,
-        [FromServices] IValidator<CreateUserDto> validator,
+    [Authorize(Roles = "Admin, Manager")]
+    [RequirePermission(UserPermissions.Create)]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateRequest request,
         CancellationToken ct)
     {
-        var validate = await validator.ValidateAsync(dto);
-        if (!validate.IsValid)
-            return BadRequest(validate.Errors.Select(e => new { property = e.PropertyName, message = e.ErrorMessage }));
+        var result = await userService.CreateAsync(request, ct);
 
-        var result = await userService.CreateAsync(dto, ct);
-
-        return Ok(new ApiResponse<UserDto>
+        return StatusCode(StatusCodes.Status201Created, new ApiResponse<UserResponse>
         {
-            Message = "Account created",
-            Data    = result,
+            Message = "User created successfully.",
+            Data = result
         });
     }
 
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Put(
-        [FromBody] UpdateUserDto dto,
+    [Authorize(Roles = "Admin, Manager")]
+    [RequirePermission(UserPermissions.Update)]
+    public async Task<IActionResult> Update(
         Guide id, 
+        [FromBody] UpdateResponse id,
         CancellationToken ct)
     {
-        var result = await userService.UpdateAsync(dto, id, ct);
+        var result = await userService.UpdateAsync(id, id, ct);
 
-        return Ok(new ApiResponse<UserDto>
+        return Ok(new ApiResponse<UpdateResponse>
         {
-            Message = "Account updated",
-            Data    = result,
+            Message = "Account updated successfully.",
+            Data = result,
         });
     }
 
-    [HttpPut("{id:guid}/activate")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Activate(
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = "Admin, Manager")]
+    [RequirePermission(UserPermissions.Delete)]
+    public async Task<IActionResult> Delete(
         Guide id, 
         CancellationToken ct)
     {
-        await userService.ActivateAsync(id, ct);
+        await userService.DeleteAsync(id, ct);
+
         return NoContent();
     }
 
-    [HttpPut("profile")]
-    public async Task<IActionResult> PutProfile(
-        [FromBody] UpdateUserDto dto,
+    [HttpPost("{id:guid}/reset-password")]
+    [Authorize(Roles = "Admin, Manager")]
+    [RequirePermission(UserPermissions.ResetPassword)]
+    public async Task<IActionResult> ResetPassword(
+        Guid id,
+        ResetPasswordRequest request,
         CancellationToken ct)
     {
-        var user = await userService.UpdateProfileAsync(dto, userId, ct);
+        await userService.ResetPasswordAsync(id, request, ct);
 
-        return Ok(new ApiResponse<UserDto>
+        return NoContent();
+    }
+
+    [HttpGet("me")]
+    public async Task<IActionResult> GetMe(CancellationToken ct)
+    {
+        var result = await userService.GetMeAsync(ct);
+
+        return Ok(new ApiResponse<UserResponse>
         {
-            Message = "Account profile updated",
-            Data    = user,
+            Message = "Profile retrieved successfully.",
+            Data = result
+        });
+    }
+
+    [HttpPut("me")]
+    public async Task<IActionResult> UpdateProfile(
+        [FromBody] UpdateProfileRequest request,
+        CancellationToken ct)
+    {
+        var result = await userService.UpdateProfileAsync(request, ct);
+
+        return Ok(new ApiResponse<UserResponse>
+        {
+            Message = "Profile updated successfully.",
+            Data = result
         });
     }
 
@@ -119,14 +141,6 @@ public class UserController(IUserService userService) : ControllerBase
         CancellationToken ct)
     {
         await userService.ChangePasswordAsync(dto, userId, ct);
-        return NoContent();
-    }
-
-    [HttpDelete("{id:guid}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-    {
-        await userService.DeleteAsync(id, ct);
         return NoContent();
     }
 }
