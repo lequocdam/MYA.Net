@@ -5,7 +5,7 @@ public class AuthenticationService(
     IRegistrationRepository registrationRepository,
     IOutboxRepository outboxRepository,
     IUnitOfWork unitOfWork,
-    //Redis/Services
+    ICurrentUserService currentUserService,
     IIdempotencyService idempotencyService,
     IOtpService otpService,
     ILoginAttemptStore loginAttemptStore,
@@ -301,7 +301,7 @@ public class AuthenticationService(
         var user = await userRepository.GetByIdAsync(data.UserId, ct)
             ?? throw new UnauthorizedException("Invalid refresh token.");
 
-        if (user.IsDeleted())
+        if (user.IsDeleted)
             throw new ConflictException("User is deleted.");
 
         var accessToken = await tokenService.GenerateAccessTokenAsync(user, refreshToken.SessionId, ct);
@@ -370,210 +370,246 @@ public class AuthenticationService(
             ct);
     }
 
-    public async Task<UserResponse> GetMeAsync(CancellationToken ct)
+    public async Task<UserProfileResponse> GetProfileAsync(CancellationToken ct)
     {
-        var profile = await userRepository.GetProfileAsync(currentUser.UserId, ct)
+        return await userRepository.GetProfileAsync(userId, ct)
             ?? throw new NotFoundException("Profile not found.");
-
-        return mapper.Map<UserResponse>(user);
     }
 
-    public async Task<UserResponse> UpdateProfileAsync(
+    public async Task UpdateProfileAsync(
         UpdateProfileRequest request,
         CancellationToken ct)
     {
-        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+        var user = await userRepository.GetByIdAsync(userId, ct)
             ?? throw new NotFoundException("User not found.");
 
-        user.UpdateProfile(request.Name);
-
+        user.UpdateProfile(name);
         await unitOfWork.SaveChangesAsync(ct);
-
-        return mapper.Map<UserResponse>(user);
     }
 
     public async Task ChangeEmailAsync(ChangeEmailRequest request, CancellationToken ct)
     {
-        var currentUser = currentUserService.GetCurrent();
+        var newEmail = emailNormalizer.Normalize(request.NewEmail);
+        var existedUser = await userRepository.ExistAsync(newEmail, ct);
 
-        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
+        if (existedUser) 
+            throw new ConflictException("Email is used.");
+
+        var user = await userRepository.GetByIdAsync(userId, ct)
             ?? throw new NotFoundException("User not found.");
 
-        var newEmail = emailNormalizer.Normalize(request.NewEmail);
-
         if (newEmail == user.Email)
-        {
-            throw new ConflictException("New email must be different.");
-        }
+            throw new ConflictException("Email is used.");
+
+        var existedUserChange = await userChangeRepository.ExistAsync(newEmail, ct);
+
+        if (existedUserChange)
+            throw new ConflictException("Email is used. Please confirm again.");
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
-
-        var currentContactChange = await contactChangeRepository.GetByUserIdAsync(
-            user.Id,
-            ContactChangeType.Email,
-            ct);
-
-        if (currentContactChange != null)
+        
+        try
         {
-            throw new ConflictException("There is already a contact change.");
+            var userChange = UserChange.Create(
+                user.Id,
+                UserChangeType.Email,
+                newEmail,
+                user.Email);
+
+            await userChangeRepository.AddAsync(userChange, ct);
+
+            var @event = new ChangeEmailRequestedEvent
+            {
+                UserId = user.Id,
+                UserChangeId = userChange.Id,
+                NewEmail = newEmail
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.ChangeEmailRequestedEvent, @even);
+
+            await outboxRepository.AddAsync(message, ct);
+
+            try
+            {
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+            {
+                throw new ConflictException("Email is used. Please confirm again.");
+            }
+
+            await transaction.CommitAsync(ct);
         }
-
-        var newContactChange = ContactChange.Create(
-            user.Id,
-            ContactChangeType.Email,
-            newEmail,
-            user.Email);
-
-        await contactChangeRepository.AddAsync(newContactChange, ct);
-
-        var @event = new ChangeEmailRequestedEvent
+        catch
         {
-            UserId = user.Id,
-            NewEmail = newEmail
-        };
-
-        var payload = JsonSerializer.Serialize(@event);
-
-        var message = OutboxMessage.Create(
-            OutboxMessageType.ChangeEmailRequestedEvent,
-            payload);
-
-        await outboxRepository.AddAsync(message, ct);
-
-        await unitOfWork.SaveChangesAsync(ct);
-
-        await transaction.CommitAsync(ct);
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
     }
 
     public async Task ChangePhoneAsync(
         ChangePhoneRequest request,
         CancellationToken ct)
     {
-        var currentUser = currentUserService.GetCurrent();
-
-        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
-            ?? throw new NotFoundException("User not found.");
-
         var newPhone = phoneNormalizer.Normalize(request.NewPhone);
+        var existedUser = await userRepository.ExistAsync(newPhone, ct);
+
+        if (existedUser) 
+            throw new ConflictException("Phone is used.");
+
+        var user = await userRepository.GetByIdAsync(userId, ct)
+            ?? throw new NotFoundException("User not found.");
 
         if (newPhone == user.Phone)
-        {
-            throw new ConflictException("New email must be different.");
-        }
+            throw new ConflictException("Phone is used.");
+
+        var existedUserChange = await userChangeRepository.ExistAsync(newPhone, ct);
+
+        if (existedUserChange)
+            throw new ConflictException("Phone is used. Please confirm again.");
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
-        var contactChange = await contactChangeRepository.GetByUserIdAsync(
-            user.Id,
-            ContactChangeType.Phone,
-            ct);
-
-        if (contactChange != null)
+        try
         {
-            throw new ConflictException("There is already a contact change.");
+            var userChange = UserChange.Create(
+                user.Id,
+                ContactChangeType.Phone,
+                newPhone,
+                user.Phone);
+
+            await userChangeRepository.AddAsync(userChange, ct);
+
+            var @event = new ChangePhoneRequestedEvent
+            {
+                UserId = user.Id,
+                Email = user.Email
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.ChangePhoneRequested, @event);
+
+            await outboxRepository.AddAsync(message, ct);
+
+            try
+            {
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+            {
+                throw new ConflictException("Phone is used. Please confirm again.");
+            }
+
+            await transaction.CommitAsync(ct);
         }
-
-        var contactChange = ContactChange.Create(
-            user.Id,
-            ContactChangeType.Phone,
-            newPhone,
-            user.Email);
-
-        await contactChangeRepository.AddAsync(contactChange, ct);
-
-        var @event = new ChangeEmailRequestedEvent
+        catch
         {
-            UserId = user.Id,
-            Email = user.Email
-        };
-
-        var payload = JsonSerializer.Serialize(@event);
-
-        var message = OutboxMessage.Create(
-            OutboxMessageType.ChangePhoneRequestedEvent,
-            payload);
-
-        await outboxRepository.AddAsync(message, ct);
-
-        await unitOfWork.SaveChangesAsync(ct);
-
-        await transaction.CommitAsync(ct);
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
     }
 
-    public async Task ConfirmAsync(
-        ConfirmRequest request,
+    public async Task ChangeEmailConfirmAsync(
+        ChangeEmailConfirmRequest request,
         CancellationToken ct)
     {
-        var currentUser = currentUserService.GetCurrent();
+        var userChange = await userChangeRepository.GetByIdentityAsync( request.UserChangeId, userId, ContactChangeType.Email, ct)
+            ?? throw new NotFoundException("UserChange not found.");
 
-        await otpService.VerifyAsync(
-            currentUser.UserId,
-            request.Code,
-            ct);
+        if (!userChange.IsPending())
+            throw new ConflictException("UserChange is confirmed.");
+        
+        var verified = await otpService.VerifyAsync(userId, request.Code, OtpPurpose.ChangeEmail, ct);
+
+        if (!verified)
+            throw new InvalidException("Invalid OTP.");
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
-        var contactChange = await contactChangeRepository.GetAsync(
-            currentUser.UserId,
-            ContactChangeType.Email,
-            ct)
-            ?? throw new NotFoundException("Contact change not found.");
-
-        var exists = await userRepository.CheckExistsAsync(contactChange.NewValue, ct);
-
-        if (exists)
+        try
         {
-            throw new ConflictException("");
+            var user = await userRepository.GetByIdAsync(userId, ct)
+                ?? throw new NotFoundException("User not found.");
+
+            user.ChangeEmail(userChange.NewValue);
+            userChange.MarkConfirm();
+
+            var @event = new ChangeEmailOtpConsumedEvent
+            {
+                UserId = user.Id
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.ConsumeChangeEmailOtp, @event);
+
+            await outboxRepository.AddAsync(message, ct);
+
+            try
+            {
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+            {
+                throw new ConflictException("Email is used.");
+            }
+
+            await transaction.CommitAsync(ct);
         }
-
-        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
-            ?? throw new NotFoundException("User not found.");
-
-        user.ChangeEmail(contactChange.NewValue);
-
-        changeRequest.MarkConfirm();
-
-        await unitOfWork.SaveChangesAsync(ct);
-
-        await transaction.CommitAsync(ct);
+        catch
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
     }
 
-    public async Task ConfirmAsync(
-        ConfirmRequest request,
+    public async Task ChangePhoneConfirmAsync(
+        ChangePhoneConfirmRequest request,
         CancellationToken ct)
     {
-        var currentUser = currentUserService.GetCurrent();
+        var userChange = await userChangeRepository.GetByIdentityAsync( request.UserChangeId, userId, ContactChangeType.Phone, ct)
+            ?? throw new NotFoundException("UserChange not found.");
 
-        await otpService.VerifyAsync(
-            currentUser.UserId,
-            request.Code,
-            ct);
+        if (!userChange.IsPending())
+            throw new ConflictException("UserChange is confirmed.");
+        
+        var verified = await otpService.VerifyAsync(userId, request.Code, OtpPurpose.ChangePhone, ct);
+
+        if (!verified)
+            throw new InvalidException("Invalid OTP.");
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
 
-        var contactChange = await contactChangeRepository.GetAsync(
-            currentUser.UserId,
-            ContactChangeType.Phone,
-            ct)
-            ?? throw new NotFoundException("Contact change not found.");
-
-        var exists = await userRepository.CheckExistsAsync(contactChange.NewValue, ct);
-
-        if (exists)
+        try
         {
-            throw new ConflictException("");
+            var user = await userRepository.GetByIdAsync(UserId, ct)
+                ?? throw new NotFoundException("User not found.");
+
+            user.ChangePhone(userChange.NewValue);
+            userChange.MarkConfirm();
+
+            var @event = new ChangePhoneOtpConsumedEvent
+            {
+                UserId = user.Id
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.ConsumeChangePhoneOtp, @event);
+
+            await outboxRepository.AddAsync(message, ct);
+
+            try
+            {
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+            {
+                throw new ConflictException("Phone is used.");
+            }
+
+            await transaction.CommitAsync(ct);
         }
-
-        var user = await userRepository.GetByIdAsync(currentUser.UserId, ct)
-            ?? throw new NotFoundException("User not found.");
-
-        user.ChangePhone(contactChange.NewValue);
-
-        changeRequest.MarkConfirm();
-
-        await unitOfWork.SaveChangesAsync(ct);
-
-        await transaction.CommitAsync(ct);
+        catch
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
     }
 
     public async Task ChangePasswordAsync(
@@ -583,14 +619,39 @@ public class AuthenticationService(
         var user = await userRepository.GetByIdAsync(userId, ct)
             ?? throw new NotFoundException("User not found.");
 
-        userPolicy.CanChangePassword(user, request);
+        var verifiedCurrentPassword = await passwordHasher.Verify(request.CurrentPassword, user.HashedPassword);
 
-        user.ChangePassword(BCrypt.Hash(request.NewPassword));
+        if (verified)
+            throw new ConflictException("Invalid current password.");
 
-        await unitOfWork.SaveChangesAsync(ct);
+        var verifiedNewPassword = await passwordHasher.VerifyAsync(request.NewPassword, user.HashedPassword, ct);
 
-        await sessionService.RevokeAllAsync(
-            user.Id,
-            ct);
+        if (verifiedNewPassword)
+            throw new ConflictException("New password is used.");
+
+        var hashedPassword = await passwordHasher.Hash(request.NewPassword);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(ct);
+
+        try
+        {
+            user.ChangePassword(newHashedPassword);
+
+            var @event = new PasswordChangedEvent
+            {
+                UserId = user.Id
+            };
+
+            var message = OutboxMessage.Create(OutboxMessageType.PasswordChanged, @event);
+
+            await outboxRepository.AddAsync(message, ct);
+            await unitOfWork.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
     }
 }

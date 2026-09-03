@@ -33,6 +33,7 @@ public class UserFilterSpecification : Specification<User>
             Query.Where(x => x.Status == status);
         }
 
+        ApplySorting(query);
     }
 
     private void ApplySorting(UserQueryParams query)

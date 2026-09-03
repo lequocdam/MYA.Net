@@ -1,17 +1,13 @@
-public class User
+public sealed class User
 {
     public Guid Id { get; private set; }
-    
+    public string? Avatar { get; private set; }
     public string? Name { get; private set; }
-
     public string? Email { get; private set; }
-
     public string? Phone { get; private set; }
-
     public string? HashedPassword { get; private set; }
-
+    public Role Role { get; private set; }
     public DateTime CreatedAt { get; private set; }
-
     public bool IsDeleted { get; private set; }
 
     public static User Create(
@@ -22,73 +18,54 @@ public class User
     {
         return new User
         {
-            Id = Guid.NewGuid();
-            Name = name;
-            Email = email;
-            Phone = phone;
-            HashedPassword = hashedPassword;
-            CreatedAt = DateTime.UtcNow;
-            IsDeleted = false;
+            Id = Guid.NewGuid(),
+            Name = name,
+            Email = email,
+            Phone = phone,
+            HashedPassword = hashedPassword,
+            Role = Role.User,
+            CreatedAt = DateTime.UtcNow,
+            IsDeleted = false
         }
     }
 
-    public void Update(
-        string name,
-        string email,
-        string phone)
+    public string UploadAvatar(string avatar)
     {
-        EnsureNotDeleted();
-
-        Name = NormalizeRequired(name, nameof(name));
-
-        Touch();
+        return Avatar = avatar;
     }
 
+    public void Update(string name)
+    {
+        Name = name;
+    }
 
     public void UpdateProfile(string name)
     {
-        EnsureNotDeleted();
+        Name = name;
+    }
 
-        Name = NormalizeRequired(name, nameof(name));
-
-        Touch();
+    public void UpdateAvatar(string avatar)
+    {
+        Avatar = avatar;
     }
 
     public void ChangeEmail(string email)
     {
-        EnsureNotDeleted();
-
-        Email = NormalizeRequired(
-            email,
-            nameof(email));
-
-        Touch();
+        Email = email;
     }
 
-    public void ChangePassword(string passwordHash)
+    public void ChangePhone(string phone)
     {
-        EnsureNotDeleted();
-
-        PasswordHash = passwordHash;
-        
-        Touch();
+        Phone = phone;
     }
 
-    public void ResetPassword(string passwordHash)
+    public void ChangePassword(string hashedPassword)
     {
-        EnsureNotDeleted();
-
-        PasswordHash = NormalizeRequired(
-            passwordHash,
-            nameof(passwordHash));
-
-        PasswordChangedAt = DateTime.UtcNow;
-
-        Touch();
+        HashedPassword = hashedPassword;  
     }
 
-    private void EnsureNotDeleted()
+    public void ResetPassword(string hashedPassword)
     {
-        if (IsDeleted) throw new DomainException("User alredy deleted.");
+        HashedPassword = hashedPassword;  
     }
 }

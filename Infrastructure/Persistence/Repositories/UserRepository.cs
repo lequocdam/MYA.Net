@@ -17,6 +17,13 @@ public class UserRepository(AppDbContext context) : RepositoryBase<User>, IUserR
         };
     }
 
+    public async Task<UserProfileResponse?> GetProfileAsync(
+        Guid id,
+        CancellationToken ct)
+    {
+        return await FirstOrDefaultAsync(new UserProfileSpecification(id), ct);
+    }
+
     public async Task<UserResponse?> GetUserByIdAsync(
         Guid id,
         CancellationToken ct)
