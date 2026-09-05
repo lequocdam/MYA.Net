@@ -4,7 +4,7 @@
 public class UserController(IUserService userService) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetUsers(
+    public async Task<IActionResult> GetList(
         [FromQuery] GetUsersRequest request,
         CancellationToken ct)
     {
@@ -85,62 +85,6 @@ public class UserController(IUserService userService) : ControllerBase
     {
         await userService.DeleteAsync(id, ct);
 
-        return NoContent();
-    }
-
-    [HttpPost("{id:guid}/reset-password")]
-    [Authorize(Roles = "Admin, Manager")]
-    [RequirePermission(UserPermissions.ResetPassword)]
-    public async Task<IActionResult> ResetPassword(
-        Guid id,
-        ResetPasswordRequest request,
-        CancellationToken ct)
-    {
-        await userService.ResetPasswordAsync(id, request, ct);
-
-        return NoContent();
-    }
-
-    [HttpGet("me")]
-    public async Task<IActionResult> GetMe(CancellationToken ct)
-    {
-        var result = await userService.GetMeAsync(ct);
-
-        return Ok(new ApiResponse<UserResponse>
-        {
-            Message = "Profile retrieved successfully.",
-            Data = result
-        });
-    }
-
-    [HttpPut("me")]
-    public async Task<IActionResult> UpdateProfile(
-        [FromBody] UpdateProfileRequest request,
-        CancellationToken ct)
-    {
-        var result = await userService.UpdateProfileAsync(request, ct);
-
-        return Ok(new ApiResponse<UserResponse>
-        {
-            Message = "Profile updated successfully.",
-            Data = result
-        });
-    }
-
-    [HttpPost("profile/avatar")]
-    public async Task<IActionResult> UploadAvatar(
-        IFormFile file, CancellationToken ct)
-    {
-        var path = await userService.UploadAvatarAsync(file, CurrentUserId, ct);
-        return Ok(new { Avatar = path });
-    }
-
-    [HttpPut("profile/password")]
-    public async Task<IActionResult> ChangePassword(
-        [FromBody] ChangePasswordDto dto, 
-        CancellationToken ct)
-    {
-        await userService.ChangePasswordAsync(dto, userId, ct);
         return NoContent();
     }
 }

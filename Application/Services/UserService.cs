@@ -1,45 +1,64 @@
-public class UserService : IUserService
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace MYAlog.Application.Services;
+
+public class UserService(
+    IUserRepository userRepository,
+    IPasswordHasher passwordHasher,
+    IUnitOfWork unitOfWork,
+    IMapper mapper,
+    ILogger<UserService> logger) : IUserService
 {
-    public async Task<PagedResult<UserResponse>> GetUsersAsync(
-        GetUsersRequest request,
+    public async Task<PagedData<UserResponse>> GetListAsync(
+        GetListRequest request,
         CancellationToken ct)
     {
-        return await userRepository.GetUsersAsync(request, ct);
+        if(!string.IsNullOrWhiteSpace(request.Keyword))
+        {
+            var keyword = request.Keyword.Trim();
+        }
+
+        var pagedUsers = await userRepository.GetListAsync(request, ct);
+
+        return new PagedData<UserResponse>
+        {
+            Items = mapper.Map<List<UserResponse>>(pagedUsers.Items),
+            TotalCount = pagedUsers.TotalCount,
+            PageIndex = pagedUsers.PageIndex,
+            PageSize = pagedUsers.PageSize
+        };
     }
 
-    public async Task<UserResponse> GetByIdAsync(Guid id)
+    public async Task<DetailResponse> GetDetailAsync(
+        Guid id,
+        CancellationToken ct)
     {
-        return await userRepository.GetByIdAsync(id, ct)
-            ?? throw new NotFoundException("User not found.");
+        var detail = await userRepository.GetDetailAsync(id, ct)
+            ?? throw new NotFoundException("User detail not found.");
+
+        return mapper.Map<DetailResponse>(detail);
     }
 
     public async Task<UserResponse> CreateAsync(
         CreateRequest request,
         CancellationToken ct)
     {
-        var exist = await userRepository.ExistAsync(
-            request.Email,
-            request.Phone,
-            ct);
+        var existed = await userRepository.ExistAsync(request.Email, request.Phone, ct);
 
-        userPolicy.CanCreate(exist);
+        if (existed)
+            throw new ConflictException("Email or phone existed.");
 
-        var hashPassword = passwordHasher.Hash(request.Password);
+        var hashedPassword = await passwordHasher.Hash(request.Password);
 
-        var user = User.Create(
-            request.Name,
-            request.Email,
-            request.Phone,
-            hashPassword);
-
+        var user = User.Create(request.Name, request.Email, request.Phone, hashedPassword);
         await userRepository.AddAsync(user, ct);
-
         await unitOfWork.SaveChangesAsync(ct);
-
+        logger.LogInformation("User {UserId} created.", user.Id);
         return mapper.Map<UserResponse>(user);
     }
 
-    public async Task<UserResponse> UpdateAsync(
+    public async Task UpdateAsync(
         Guid id,
         UpdateRequest request,
         CancellationToken ct)
@@ -47,14 +66,39 @@ public class UserService : IUserService
         var user = await userRepository.GetByIdAsync(id, ct)
             ?? throw new NotFoundException("User not found.");
 
-        user.Update(
-            request.Name,
-            request.Email,
-            request.Phone);
+        var existed = await userRepository.ExistAsync(request.Email, request.Phone, ct);
 
+        if (existed)
+            throw new ConflictException("Email or phone existed.");
+
+        user.Update(request.Name, request.Email, request.Phone);
         await unitOfWork.SaveChangesAsync(ct);
+        logger.LogInformation("User {UserId} updated.", user.Id);
+    }
 
-        return mapper.Map<UpdateResponse>(user);
+    public async Task ChangeStatusAsync(
+        Guid id,
+        UserStatus status,
+        CancellationToken ct)
+    {
+        var user = await userRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        user.ChangeStatus(status);
+        await unitOfWork.SaveChangesAsync(ct);
+        logger.LogInformation("User {UserId} changed to {Status}.", user.Id, status);
+    }
+
+    public async Task UnlockAsync(
+        Guid id,
+        CancellationToken ct)
+    {
+        var user = await userRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException("User not found.");
+
+        user.Unlock();
+        await unitOfWork.SaveChangesAsync(ct);
+        logger.LogInformation("User {UserId} unlocked.", user.Id);
     }
 
     public async Task DeleteAsync(
@@ -64,8 +108,8 @@ public class UserService : IUserService
         var user = await userRepository.GetByIdAsync(id, ct)
             ?? throw new NotFoundException("User not found.");
 
-         user.Delete();
-
+        user.Delete();
         await unitOfWork.SaveChangesAsync(ct);
+        logger.LogInformation($"User {user.Id} deleted.");
     }
 }

@@ -1,8 +1,8 @@
-public sealed class OutboxRepository(AppDbContext dbContext) : IOutboxRepository
+public sealed class OutboxRepository(AppDbContext context) : RepositoryBase<OutboxMessage>, IOutboxRepository
 {
     public async Task AddAsync(OutboxMessage message, CancellationToken ct = default)
     {
-        await dbContext.Users.AddAsync(user, ct);
+        await context.OutboxMessages.AddAsync(user, ct);
     }
 
     public async Task ClaimAsync(OutboxMessage message, CancellationToken ct = default)

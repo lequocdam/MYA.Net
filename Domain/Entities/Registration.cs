@@ -8,7 +8,7 @@ public class Registration
     public RegistrationStatus Status { get; private set; }
     public DateTime CreatedAt { get; private set; }
 
-    private Registration(){}
+    private Registration() {}
 
     public static Registration Create(
         string name,
@@ -16,28 +16,40 @@ public class Registration
         string phone,
         string hashedPassword)
     {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new DomainException("Name is required.");
+
+        if (string.IsNullOrWhiteSpace(hashedPassword))
+            throw new DomainException("Hashed password is required.");
+
         return new Registration
         {
-            Id = Guid.NewGuid();
-            Name = name;
-            Email = email;
-            Phone = phone;
-            HashedPassword = hashedPassword;
-            Status = RegistrationStatus.Pending;
-            CreatedAt = DateTime.UtcNow;
+            Id = Guid.NewGuid(),
+            Name = name.Trim(),
+            Email = email,
+            Phone = phone,
+            HashedPassword = hashedPassword.Trim(),
+            Status = RegistrationStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+            ExpiredAt = DateTime.UtcNow.Add(PendingChangeExpiry)
         }
     }
 
     public void MarkConfirmed()
     {
-        if (!IsPending())
+        if (Status != RegistrationStatus.Pending)
             throw new DomainException("Registration is not pending.");
 
         Status = RegistrationStatus.Confirmed;
+        ConfirmedAt = DateTime.UtcNow;
     }
 
-    public bool IsPending()
+    public void MarkExpired()
     {
-        return Status == RegistrationStatus.Pending;
+        if (Status != UserChangeStatus.Pending)
+            throw new DomainException("Registration is not pending.");
+
+        Status = UserChangeStatus.Expired;
+        ExpiredAt = DateTime.UtcNow;
     }
 }

@@ -12,17 +12,26 @@ public class OrderService(
     IOrderPermissionSpecification orderPermissionSpec,
     IFilterOrderSpec filterOrderSpec,
     IEventBus        eventBus,
-    ILogger<OrderService> logger
-) : IOrderService
+    ILogger<OrderService> logger) : IOrderService
 {
-    public async Task<OrderPageDto> GetOrdersAsync(
-        OrderFilterReq req, CurrentUser currentUser, CancellationToken ct)
+    public async Task<PagedData<OrderResponse>> GetListAsync(
+        GetListRequest request, 
+        CancellationToken ct)
     {
         var spec = orderFilterSpec(req, currentUser);
         var total = await orderRepository.CountAsync(spec, ct);
         var orders = await orderRepository.ToListAsync(spec, ct);
         var result = mapper.Map<List<OrderDto>>(orders);
         return new OrderPageDto(req.Page, req.PageSize, total, result);
+        var pagedUsers = await orderRepository.GetListAsync(request, ct);
+
+        return new PagedData<UserResponse>
+        {
+            Items = mapper.Map<List<UserResponse>>(pagedUsers.Items),
+            TotalCount = pagedUsers.TotalCount,
+            PageIndex = pagedUsers.PageIndex,
+            PageSize = pagedUsers.PageSize
+        };
     }
 
     public async Task<OrderDetailDto> GetByIdAsync(
@@ -36,8 +45,7 @@ public class OrderService(
         return mapper.Map<OrderDetailDto>(order);
     }
 
-    public async Task<Guid> CreateAsync(
-        CurrentUser currentUser, 
+    public async Task<OrderResponse> CreateAsync(
         CreateRequest request, 
         CancellationToken ct)
     {

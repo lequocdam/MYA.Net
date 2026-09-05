@@ -13,6 +13,24 @@ public class ExceptionMiddleware(RequestDelegate next, ILogger<ExceptionMiddlewa
             logger.LogWarning("AppException: {Code} - {Message}", ex.ErrorCode, ex.Message);
             await WriteResponse(ctx, ex.StatusCode, ex.ErrorCode, ex.Message);
         }
+        catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation())
+        {
+            logger.LogWarning(ex, "Database unique constraint violation.");
+            await WriteResponse(ctx,
+                StatusCodes.Status409Conflict,
+                "DUPLICATE_RESOURCE",
+                "A resource with the same unique value already exists.");
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            logger.LogWarning(ex, "Concurrency conflict occurred.");
+
+            await WriteResponse(
+                context,
+                StatusCodes.Status409Conflict,
+                "CONCURRENCY_CONFLICT",
+                "The resource was modified by another request.");
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Unhandled exception");

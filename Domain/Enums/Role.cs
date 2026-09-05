@@ -1,6 +1,6 @@
 public enum Role
 {
-    USER = "User",
-    DRIVER = "Driver",
-    MANAGER = "Manager"
+    Customer = 1,
+    Driver = 2,
+    Manager = 3,
 }

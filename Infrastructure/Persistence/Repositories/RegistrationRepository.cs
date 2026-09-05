@@ -30,8 +30,9 @@ public class RegistrationRepository(AppDbContext context) : RepositoryBase<Regis
         CancellationToken ct)
     {
         return await context.Registrations.AnyAsync(u =>
+            u.IsDeleted = false &&(
             u.Email == email ||
-            u.Phone == phone,
+            u.Phone == phone),
             ct);
     }
 

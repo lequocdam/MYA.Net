@@ -48,8 +48,9 @@ public class UserRepository(AppDbContext context) : RepositoryBase<User>, IUserR
         CancellationToken ct)
     {
         return await context.Users.AnyAsync(u =>
+            u.IsDeleted = false &&(
             u.Email == email ||
-            u.Phone == phone,
+            u.Phone == phone),
             ct);
     }
 

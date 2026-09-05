@@ -100,20 +100,23 @@ public class AuthenticationController(IAuthenticationService authenticationServi
 
     [Authorize]
     [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh(
-        [FromHeader(Name = "X-Refresh-Token")] RefreshDTO Dto,
-        [FromServices] IValidator<RefreshDTO> validator)
+    [EnableRateLimiting("refresh")]
+    public async Task<IActionResult> Refresh([FromHeader(Name = "X-Refresh-Token")] RefreshDTO Dto)
     {
-        var result = await validator.ValidateAsync(Dto);
-        if (!result.IsValid)
-            return BadRequest(result.Errors.Select(e => new { field = e.PropertyName, message = e.ErrorMessage }));
+        var data = await authService.RefreshAsync(Dto, UserId);
 
-        var tokens = await authService.RefreshAsync(Dto, UserId);
+        SetRefreshTokenCookie(data.RefreshToken, data.RefreshExpiresAt);
 
-        return Ok(new ApiResponse<TokensDTO>
+        var response = new RefreshResponse
+        {
+            AccessToken = data.AccessToken, 
+            AccessExpiresAt = data.AccessExpiresAt
+        };
+
+        return Ok(new ApiResponse<RefreshResponse>
         {
             Message = "Account refreshed",
-            Data = tokens,
+            Data = response,
         });
     }
 
